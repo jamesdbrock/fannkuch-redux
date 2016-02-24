@@ -34,8 +34,7 @@ fannkuch n = do
                 then return (c,m)
                 else do
                     VM.unsafeCopy tperm perm
-                    --- let count_flips !flips = {-# SCC "count_flips" #-} do
-                    let count_flips !flips = do
+                    let count_flips !flips = {-# SCC "count_flips" #-} do
                             f <- VM.unsafeRead tperm 0
                             if f == 1
                             then loop (c + (if pc .&. 1 == 0 then flips else -flips))
