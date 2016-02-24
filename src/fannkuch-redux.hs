@@ -5,6 +5,7 @@
     contributed by Branimir Maksimovic
     optimized/rewritten by Bryan O'Sullivan
     modified by Gabriel Gonzalez
+    parallelized by James Brock
 -}
 
 import System.Environment
@@ -28,21 +29,22 @@ fannkuch n = do
     let
         loop :: Int -> Int -> Int -> IO(Int,Int)
         loop !c !m !pc = do
-        b <- next_permutation perm n cnt
-        if b == False
-            then return (c,m)
-            else do
-            VM.unsafeCopy tperm perm
-            let count_flips !flips = {-# SCC "count_flips" #-} do
-                f <- VM.unsafeRead tperm 0
-                if f == 1
-                then loop (c + (if pc .&. 1 == 0 then flips else -flips))
-                            (max m flips)
-                            (pc+1)
+            b <- next_permutation perm n cnt
+            if b == False
+                then return (c,m)
                 else do
-                    VG.reverse $ VM.unsafeSlice 0 f tperm
-                    count_flips (flips+1)
-            count_flips 0
+                    VM.unsafeCopy tperm perm
+                    --- let count_flips !flips = {-# SCC "count_flips" #-} do
+                    let count_flips !flips = do
+                            f <- VM.unsafeRead tperm 0
+                            if f == 1
+                            then loop (c + (if pc .&. 1 == 0 then flips else -flips))
+                                        (max m flips)
+                                        (pc+1)
+                            else do
+                                VG.reverse $ VM.unsafeSlice 0 f tperm
+                                count_flips (flips+1)
+                    count_flips 0
     loop 0 0 1
 
 next_permutation :: VM.IOVector Int -> Int -> VM.IOVector Int -> IO Bool
