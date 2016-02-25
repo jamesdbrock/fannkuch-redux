@@ -25,7 +25,7 @@ import qualified Data.Vector.Unboxed as V
 
 main = do
     n <- getArgs >>= readIO.head
-    putStrLn $ "Pfannkuchen(" ++ show n ++ ") = " ++ show (experiment n)
+    putStrLn $ "Pfannkuchen(" ++ show n ++ ") = " ++ show (fannkuchNaive n)
     --- (checksum,maxflips) <- fannkuch n
     --- printf "%d\nPfannkuchen(%d) = %d\n" checksum n maxflips
 
@@ -106,16 +106,22 @@ perm xs k = [xs !! i | i <- dfr (rr (length xs) k)]
 
 
 
-experiment :: Int -> Int
-experiment n = maximum $ map flipcount $ permutations [1..n]
+fannkuchNaive :: Int -> Int -- (Int, Int)
+fannkuchNaive n = maximum $ map flipCount $ permutations [1..n]
+  where
+    flipCount :: [Int] -> Int
+    flipCount xs0 = go xs0 0
+      where
+        go (1:_) cnt = cnt
+        go xs@(x:_) cnt = go (reverse lxs ++ rxs) (cnt + 1)
+          where
+            (lxs, rxs) = splitAt x xs
 
-
-flipcount :: [Int] -> Int
-flipcount xs0 = go xs0 0
-    where
-    go (1:_) c = c
-    go xs c = go (flipit xs) (c+1)
-    flipit xs@(x:_) = let (ls, rs) = splitAt x xs in reverse ls ++ rs
+        --- go xs cnt = go (flipFront xs) (cnt+1)
+        ---   where
+        ---     flipFront xs@(x:_) = reverse ls ++ rs
+        ---       where
+        ---         (ls, rs) = splitAt x xs
 
 
 ---                     let count_flips !flips = {-# SCC "count_flips" #-} do
