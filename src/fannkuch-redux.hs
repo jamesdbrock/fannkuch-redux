@@ -8,9 +8,16 @@
     parallelized by James Brock
 -}
 
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
 import System.Environment
 import Text.Printf
 import Data.Bits
+import Data.Monoid
+import Data.List
+
+import Debug.Trace
 
 import qualified Data.Vector.Unboxed.Mutable as VM
 import qualified Data.Vector.Generic.Mutable as VG
@@ -18,14 +25,19 @@ import qualified Data.Vector.Unboxed as V
 
 main = do
     n <- getArgs >>= readIO.head
-    (checksum,maxflips) <- fannkuch n
-    printf "%d\nPfannkuchen(%d) = %d\n" checksum n maxflips
+    putStrLn $ "Pfannkuchen(" ++ show n ++ ") = " ++ show (experiment n)
+    --- (checksum,maxflips) <- fannkuch n
+    --- printf "%d\nPfannkuchen(%d) = %d\n" checksum n maxflips
 
 fannkuch :: Int -> IO (Int, Int)
 fannkuch n = do
+
+    -- VM.IOVector Int vectors of length n
     perm <- V.unsafeThaw $ V.enumFromN 1 n
-    !tperm <- VG.new n
-    !cnt <- VG.replicate n 0
+    !tperm <- VM.new n
+    !cnt <- VM.replicate n 0
+
+
     let
         loop :: Int -> Int -> Int -> IO(Int,Int)
         loop !c !m !pc = do
@@ -75,3 +87,43 @@ next_permutation perm !n !cnt = loop 1
             v <- VM.unsafeRead cnt i
             VM.unsafeWrite cnt i (v+1)
             return True
+
+-- http://en.literateprograms.org/Kth_permutation_%28Haskell%29
+
+-- radix representation
+rr :: Int -> Int -> [Int]
+rr 0 _ = []
+rr n k = k `mod` n : rr (n-1) (k `div` n)
+--- rr n k = rr (n-1) (k `div` n) <> [k `mod` n]
+
+-- direct representation from radix rep
+dfr :: [Int] -> [Int]
+dfr = foldr (\x rs -> x : [r + (if x <= r then 1 else 0) | r <- rs]) []
+
+-- generate permutation
+perm :: [a] -> Int -> [a]
+perm xs k = [xs !! i | i <- dfr (rr (length xs) k)]
+
+
+
+experiment :: Int -> Int
+experiment n = maximum $ map flipcount $ permutations [1..n]
+
+
+flipcount :: [Int] -> Int
+flipcount xs0 = go xs0 0
+    where
+    go (1:_) c = c
+    go xs c = go (flipit xs) (c+1)
+    flipit xs@(x:_) = let (ls, rs) = splitAt x xs in reverse ls ++ rs
+
+
+---                     let count_flips !flips = {-# SCC "count_flips" #-} do
+---                             f <- VM.unsafeRead tperm 0
+---                             if f == 1
+---                             then loop (c + (if pc .&. 1 == 0 then flips else -flips))
+---                                         (max m flips)
+---                                         (pc+1)
+---                             else do
+---                                 VG.reverse $ VM.unsafeSlice 0 f tperm
+---                                 count_flips (flips+1)
