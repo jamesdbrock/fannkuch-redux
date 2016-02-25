@@ -10,6 +10,8 @@
 
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+--- {-# LANGAUGE RecordWildCards #-}
+--- {-# LANGAUGE NamedFieldPuns #-}
 
 import System.Environment
 import Text.Printf
@@ -25,7 +27,11 @@ import qualified Data.Vector.Unboxed as V
 
 main = do
     n <- getArgs >>= readIO.head
-    putStrLn $ "Pfannkuchen(" ++ show n ++ ") = " ++ show (fannkuchNaive n)
+    let (maxFlipCount, checkSum) = fannkuchNaive n
+    putStr $ unlines
+        [ show checkSum
+        , "Pfannkuchen(" ++ show n ++ ") = " ++ show maxFlipCount
+        ]
     --- (checksum,maxflips) <- fannkuch n
     --- printf "%d\nPfannkuchen(%d) = %d\n" checksum n maxflips
 
@@ -105,12 +111,32 @@ perm :: [a] -> Int -> [a]
 perm xs k = [xs !! i | i <- dfr (rr (length xs) k)]
 
 
+data FK = FK
+   { fkMaxFlipCount :: !Int
+   , fkCheckSum     :: !Int
+   , fkPermIndex    :: !Int
+   }
 
-fannkuchNaive :: Int -> Int -- (Int, Int)
-fannkuchNaive n = maximum $ map flipCount $ permutations [1..n]
+fannkuchNaive
+    :: Int
+    -> (Int, Int) -- ^ (maximum flip count, checksum)
+fannkuchNaive 0 = (0,0)
+fannkuchNaive n = (maxFlipCount, checkSum)
   where
-    flipCount :: [Int] -> Int
-    flipCount xs0 = go xs0 0
+    FK maxFlipCount checkSum _ = foldl' fkAccum (FK 0 0 0) $ permutations [1..n]
+
+    fkAccum :: FK -> [Int] -> FK
+    fkAccum fk xs =
+        FK
+        { fkMaxFlipCount = max fcnt $ fkMaxFlipCount fk
+        , fkCheckSum     = fkCheckSum fk + if even (fkPermIndex fk) then fcnt else negate fcnt
+        , fkPermIndex    = fkPermIndex fk + 1
+        }
+      where
+        fcnt = flipsCount xs
+
+    flipsCount :: [Int] -> Int
+    flipsCount xs0 = go xs0 0
       where
         go (1:_) cnt = cnt
         go xs@(x:_) cnt = go (reverse lxs ++ rxs) (cnt + 1)
