@@ -27,13 +27,15 @@ import qualified Data.Vector.Unboxed as V
 
 main = do
     n <- getArgs >>= readIO.head
-    let (maxFlipCount, checkSum) = fannkuchNaive n
-    putStr $ unlines
-        [ show checkSum
-        , "Pfannkuchen(" ++ show n ++ ") = " ++ show maxFlipCount
-        ]
-    --- (checksum,maxflips) <- fannkuch n
-    --- printf "%d\nPfannkuchen(%d) = %d\n" checksum n maxflips
+
+    --- let (maxFlipCount, checkSum) = fannkuchNaïve n
+    --- putStr $ unlines
+    ---     [ show checkSum
+    ---     , "Pfannkuchen(" ++ show n ++ ") = " ++ show maxFlipCount
+    ---     ]
+
+    (checksum,maxflips) <- fannkuch n
+    printf "%d\nPfannkuchen(%d) = %d\n" checksum n maxflips
 
 fannkuch :: Int -> IO (Int, Int)
 fannkuch n = do
@@ -48,6 +50,8 @@ fannkuch n = do
         loop :: Int -> Int -> Int -> IO(Int,Int)
         loop !c !m !pc = do
             b <- next_permutation perm n cnt
+            b' <- V.freeze perm
+            traceIO $ show $ V.toList b'
             if b == False
                 then return (c,m)
                 else do
@@ -111,35 +115,63 @@ perm :: [a] -> Int -> [a]
 perm xs k = [xs !! i | i <- dfr (rr (length xs) k)]
 
 
-data FK = FK
-   { fkMaxFlipCount :: !Int
-   , fkCheckSum     :: !Int
-   , fkPermIndex    :: !Int
-   }
 
-fannkuchNaive
+-- this is the special permuation ordering necessary for the permutation indices to have the required evenness.
+permute :: [Int] -> [[Int]]
+permute [] = [[]]
+permute [x] = [[x]]
+permute xs = take (length xs) $ iterate rotateLeft xs
+  where
+    rotateLeft (x:xs) = xs ++ [x]
+    -- subRotate (x:xs) = x : rotateLeft xs
+    -- subRotate (x:xs) =
+
+
+--- data FK = FK
+---    { fkMaxFlipCount :: !Int
+---    , fkCheckSum     :: !Int
+---    , fkPermIndex    :: !Int
+---    } deriving (Show)
+
+fannkuchNaïve
     :: Int
     -> (Int, Int) -- ^ (maximum flip count, checksum)
-fannkuchNaive 0 = (0,0)
-fannkuchNaive n = (maxFlipCount, checkSum)
+fannkuchNaïve 0 = (0,0)
+fannkuchNaïve n = (maxFlipCountFinal, checkSumFinal)
   where
-    FK maxFlipCount checkSum _ = foldl' fkAccum (FK 0 0 0) $ permutations [1..n]
 
-    fkAccum :: FK -> [Int] -> FK
-    fkAccum fk xs =
-        FK
-        { fkMaxFlipCount = max fcnt $ fkMaxFlipCount fk
-        , fkCheckSum     = fkCheckSum fk + if even (fkPermIndex fk) then fcnt else negate fcnt
-        , fkPermIndex    = fkPermIndex fk + 1
-        }
+
+    (maxFlipCountFinal, checkSumFinal, _) = foldl' fkAccum (0, 0, 0) $ permutations [1..n]
+
+    fkAccum :: (Int, Int, Int) -> [Int] -> (Int, Int, Int)
+    fkAccum (maxFlipCount, checkSum, permIndex) xs =
+        trace (show permIndex ++ " " ++ show xs ++ " " ++ show fcnt ++ "  +" ++ show (if even permIndex then fcnt else negate fcnt) ++ "=" ++ show checkSum')
+        (maxFlipCount', checkSum', permIndex')
       where
-        fcnt = flipsCount xs
+        fcnt          = flipsCount xs
+        maxFlipCount' = max fcnt maxFlipCount
+        checkSum'     = checkSum + if even permIndex then fcnt else -fcnt
+        permIndex'    = permIndex + 1
+
+    --- FK maxFlipCount checkSum _ = foldl' fkAccum (FK 0 0 0) $ permutations [1..n]
+
+    --- fkAccum :: FK -> [Int] -> FK
+    --- fkAccum fk xs =
+    ---     --- trace xs $ trace
+    ---     traceShow (fkPermIndex fk) $ traceShow xs $ traceShow fcnt $ traceShowId
+    ---     FK
+    ---     { fkMaxFlipCount = max fcnt $ fkMaxFlipCount fk
+    ---     , fkCheckSum     = fkCheckSum fk + if even (fkPermIndex fk) then fcnt else negate fcnt
+    ---     , fkPermIndex    = fkPermIndex fk + 1
+    ---     }
+    ---   where
+    ---     fcnt = flipsCount xs
 
     flipsCount :: [Int] -> Int
     flipsCount xs0 = go xs0 0
       where
-        go (1:_) cnt = cnt
-        go xs@(x:_) cnt = go (reverse lxs ++ rxs) (cnt + 1)
+        go (1:_) !cnt = cnt
+        go xs@(x:_) !cnt = go (reverse lxs ++ rxs) (cnt + 1)
           where
             (lxs, rxs) = splitAt x xs
 
