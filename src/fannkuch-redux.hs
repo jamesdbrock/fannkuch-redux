@@ -28,75 +28,146 @@ import qualified Data.Vector.Unboxed as V
 main = do
     n <- getArgs >>= readIO.head
 
+    let
+        factorialTable :: V.Vector Int
+        --- factorialTable = V.create $ do
+        ---     v <- VM.new n
+        ---     return v
+        factorialTable = V.constructN n (\v -> if V.null v then 1 else (V.last v) * (V.last v + 1))
+
     --- let (maxFlipCount, checkSum) = fannkuchNaïve n
     --- putStr $ unlines
     ---     [ show checkSum
     ---     , "Pfannkuchen(" ++ show n ++ ") = " ++ show maxFlipCount
     ---     ]
 
-    (checksum,maxflips) <- fannkuch n
-    printf "%d\nPfannkuchen(%d) = %d\n" checksum n maxflips
+    (checkSum, maxFlipsCount) <- fannkuch n
+    --- printf "%d\nPfannkuchen(%d) = %d\n" checksum n maxflips
+    putStr $ unlines
+        [ show checkSum
+        , "Pfannkuchen(" ++ show n ++ ") = " ++ show maxFlipsCount
+        ]
 
 fannkuch :: Int -> IO (Int, Int)
 fannkuch n = do
 
-    -- VM.IOVector Int vectors of length n
-    perm <- V.unsafeThaw $ V.enumFromN 1 n
-    !tperm <- VM.new n
-    !cnt <- VM.replicate n 0
+    -- Mutable VM.IOVector Int vectors of length n
 
+    -- permutation vector
+    !perm  <- V.unsafeThaw $ V.enumFromN 1 n
+
+    -- temporary copy of perm
+    !tperm <- VM.new n
+
+    -- To optimize the process I use an intermediate data structure, count[],
+    -- which keeps count of how many rotations have been done at every level.
+    -- Apparently, count[0] is always 0, as there is only one element at that
+    -- level, which can't be rotated; count[1] = 0..1 for two elements,
+    -- count[2] = 0..2 for three elements, etc.
+    !count <- VM.replicate n 0
 
     let
-        loop :: Int -> Int -> Int -> IO(Int,Int)
-        loop !c !m !pc = do
-            b <- next_permutation perm n cnt
-            b' <- V.freeze perm
-            traceIO $ show $ V.toList b'
-            if b == False
-                then return (c,m)
-                else do
-                    VM.unsafeCopy tperm perm
-                    let count_flips !flips = {-# SCC "count_flips" #-} do
-                            f <- VM.unsafeRead tperm 0
-                            if f == 1
-                            then loop (c + (if pc .&. 1 == 0 then flips else -flips))
-                                        (max m flips)
-                                        (pc+1)
-                            else do
-                                VG.reverse $ VM.unsafeSlice 0 f tperm
-                                count_flips (flips+1)
-                    count_flips 0
-    loop 0 0 1
+        fannkuchLoop
+            :: Int -- ^ c, the checkSum
+            -> Int -- ^ m, the maxFlipsCount
+            -> Int -- ^ pc, the permutation index.
+            -> IO (Int, Int)
+                -- ^ Returns (checkSum, maxFlipsCount)
+        fannkuchLoop !c !m !pc = do
+            morePerms <- permNext perm n count
+            perm' <- V.freeze perm
+            traceIO $ show $ V.toList perm'
 
-next_permutation :: VM.IOVector Int -> Int -> VM.IOVector Int -> IO Bool
-next_permutation perm !n !cnt = loop 1
-    where
-    loop :: Int -> IO Bool
-    loop i
-        | i >= n = done i
-        | otherwise = do
-            tmp <- VM.unsafeRead perm 0
-            let
-                rotate :: Int -> IO()
-                rotate j
-                    | j >= i = VM.unsafeWrite perm i tmp
-                    | otherwise = do
-                        !v <- VM.unsafeRead perm (j+1)
-                        VM.unsafeWrite perm j v
-                        rotate (j+1)
-            rotate 0
-            v <- VM.unsafeRead cnt i
-            if v >= i
-            then VM.unsafeWrite cnt i 0 >> loop (i+1)
-            else done i
+            if morePerms == False
+            then return (c,m)
+            else do
+                VM.unsafeCopy tperm perm
+                let countFlips !flips = {-# SCC "countFlips" #-} do
+                        tperm0 <- VM.unsafeRead tperm 0
+                        if tperm0 == 1
+                        then
+                            fannkuchLoop
+                                (c + (if pc .&. 1 == 0 then flips else -flips))
+                                (max m flips)
+                                (pc+1)
+                        else do
+                            VG.reverse $ VM.unsafeSlice 0 tperm0 tperm
+                            countFlips (flips+1)
+                countFlips 0
 
-    done :: Int -> IO Bool
-    done i
+    fannkuchLoop 0 0 1
+
+
+-- | Generate the next permutation from the count array.
+permNext
+    :: VM.IOVector Int
+        -- ^ Vector to be mutated to next permuation.
+    -> Int
+        -- ^ Length of permutation.
+    -> VM.IOVector Int
+        -- ^ count vector for recursion depth state.
+    -> IO Bool
+        -- ^ Returns False when there are no more permutations.
+permNext perm !n !count = permNextLoop 1
+  where
+    permNextLoop
+        :: Int -- i loops over [1..n-1]
+        -> IO Bool
+            -- ^ Returns False when there are no more permutations.
+    permNextLoop !i
         | i >= n = return False
         | otherwise = do
-            v <- VM.unsafeRead cnt i
-            VM.unsafeWrite cnt i (v+1)
-            return True
+            perm0 <- VM.unsafeRead perm 0 -- perm0 is the 0th value in perm
+            let
+                rotate -- left-rotate the first i places of perm.
+                    :: Int
+                    -> IO ()
+                rotate j
+                    | j >= i = VM.unsafeWrite perm i perm0
+                    | otherwise = do
+                        !permj1 <- VM.unsafeRead perm (j+1)
+                        VM.unsafeWrite perm j permj1
+                        rotate (j+1)
+            rotate 0 -- left-rotate the first i places of perm
+            counti <- VM.unsafeRead count i
+            if counti >= i
+            then do
+                VM.unsafeWrite count i 0
+                permNextLoop (i+1)
+            else do
+                VM.unsafeWrite count i (counti+1)
+                return True
+
+
+-- | Generate the ith permutation.
+--
+-- It should be clear now how to generate a permutation and corresponding
+-- count[] array from an arbitrary index. Basically,
+--
+-- count[k] = ( index % (k+1)! ) / k!
+--
+-- is the number of rotations we need to perform on elements 0..k.
+-- Doing it in the descending order from n-1 to 1 gives us both the count[]
+-- array and the permutation.
+permIndex
+    :: Int -- ^ Length of permuation.
+    -> Int -- ^ ith permutation index.
+    -> VM.IOVector Int -- ^ Mutable permutation output.
+    -> VM.IOVector Int -- ^ Mutable count vector output.
+    -> IO ()
+--- permIndex !n !i !perm !count = undefined
+permIndex !n !i !perm !count = do
+    let permIndexLoop
+            :: Int
+            -> IO ()
+        permIndexLoop i
+            | i == 0    = return ()
+            | otherwise = do
+                permIndexLoop $ i - 1
+    permIndexLoop $ n - 1
+
+
+
 
 -- http://en.literateprograms.org/Kth_permutation_%28Haskell%29
 
@@ -116,23 +187,20 @@ perm xs k = [xs !! i | i <- dfr (rr (length xs) k)]
 
 
 
--- this is the special permuation ordering necessary for the permutation indices to have the required evenness.
-permute :: [Int] -> [[Int]]
-permute [] = [[]]
-permute [x] = [[x]]
-permute xs = take (length xs) $ iterate rotateLeft xs
-  where
-    rotateLeft (x:xs) = xs ++ [x]
-    -- subRotate (x:xs) = x : rotateLeft xs
-    -- subRotate (x:xs) =
+--- -- this is the special permuation ordering necessary for the permutation indices to have the required evenness.
+--- permute :: [Int] -> [[Int]]
+--- permute [] = [[]]
+--- permute [x] = [[x]]
+--- permute xs = take (length xs) $ iterate rotateLeft xs
+---   where
+---     rotateLeft (x:xs) = xs ++ [x]
+---     -- subRotate (x:xs) = x : rotateLeft xs
+---     -- subRotate (x:xs) =
 
 
---- data FK = FK
----    { fkMaxFlipCount :: !Int
----    , fkCheckSum     :: !Int
----    , fkPermIndex    :: !Int
----    } deriving (Show)
-
+-- fannkuchNaïve doesn't work because the permutation order is different than the
+-- reference implementation, so the evenness assigned to each permutation is
+-- wrong and the checksum comes out wrong.
 fannkuchNaïve
     :: Int
     -> (Int, Int) -- ^ (maximum flip count, checksum)
@@ -140,32 +208,15 @@ fannkuchNaïve 0 = (0,0)
 fannkuchNaïve n = (maxFlipCountFinal, checkSumFinal)
   where
 
-
     (maxFlipCountFinal, checkSumFinal, _) = foldl' fkAccum (0, 0, 0) $ permutations [1..n]
 
     fkAccum :: (Int, Int, Int) -> [Int] -> (Int, Int, Int)
-    fkAccum (maxFlipCount, checkSum, permIndex) xs =
-        trace (show permIndex ++ " " ++ show xs ++ " " ++ show fcnt ++ "  +" ++ show (if even permIndex then fcnt else negate fcnt) ++ "=" ++ show checkSum')
-        (maxFlipCount', checkSum', permIndex')
+    fkAccum (!maxFlipCount, !checkSum, !permIndex) xs = (maxFlipCount', checkSum', permIndex')
       where
-        fcnt          = flipsCount xs
-        maxFlipCount' = max fcnt maxFlipCount
-        checkSum'     = checkSum + if even permIndex then fcnt else -fcnt
-        permIndex'    = permIndex + 1
-
-    --- FK maxFlipCount checkSum _ = foldl' fkAccum (FK 0 0 0) $ permutations [1..n]
-
-    --- fkAccum :: FK -> [Int] -> FK
-    --- fkAccum fk xs =
-    ---     --- trace xs $ trace
-    ---     traceShow (fkPermIndex fk) $ traceShow xs $ traceShow fcnt $ traceShowId
-    ---     FK
-    ---     { fkMaxFlipCount = max fcnt $ fkMaxFlipCount fk
-    ---     , fkCheckSum     = fkCheckSum fk + if even (fkPermIndex fk) then fcnt else negate fcnt
-    ---     , fkPermIndex    = fkPermIndex fk + 1
-    ---     }
-    ---   where
-    ---     fcnt = flipsCount xs
+        !fcnt          = flipsCount xs
+        !maxFlipCount' = max fcnt maxFlipCount
+        !checkSum'     = checkSum + if even permIndex then fcnt else -fcnt
+        !permIndex'    = permIndex + 1
 
     flipsCount :: [Int] -> Int
     flipsCount xs0 = go xs0 0
@@ -175,19 +226,3 @@ fannkuchNaïve n = (maxFlipCountFinal, checkSumFinal)
           where
             (lxs, rxs) = splitAt x xs
 
-        --- go xs cnt = go (flipFront xs) (cnt+1)
-        ---   where
-        ---     flipFront xs@(x:_) = reverse ls ++ rs
-        ---       where
-        ---         (ls, rs) = splitAt x xs
-
-
----                     let count_flips !flips = {-# SCC "count_flips" #-} do
----                             f <- VM.unsafeRead tperm 0
----                             if f == 1
----                             then loop (c + (if pc .&. 1 == 0 then flips else -flips))
----                                         (max m flips)
----                                         (pc+1)
----                             else do
----                                 VG.reverse $ VM.unsafeSlice 0 f tperm
----                                 count_flips (flips+1)
