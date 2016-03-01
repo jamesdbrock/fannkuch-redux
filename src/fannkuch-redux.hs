@@ -18,6 +18,7 @@ import Text.Printf
 import Data.Bits
 import Data.Monoid
 import Data.List
+import Control.Monad
 
 import Debug.Trace
 
@@ -30,10 +31,7 @@ main = do
 
     let
         factorialTable :: V.Vector Int
-        --- factorialTable = V.create $ do
-        ---     v <- VM.new n
-        ---     return v
-        factorialTable = V.constructN n (\v -> if V.null v then 1 else (V.last v) * (V.last v + 1))
+        factorialTable = V.constructN n (\v -> if V.null v then 1 else (V.last v) * (V.length v + 1))
 
     --- let (maxFlipCount, checkSum) = fannkuchNaïve n
     --- putStr $ unlines
@@ -139,7 +137,7 @@ permNext perm !n !count = permNextLoop 1
                 return True
 
 
--- | Generate the ith permutation.
+-- | Generate permutation from a permuation index.
 --
 -- It should be clear now how to generate a permutation and corresponding
 -- count[] array from an arbitrary index. Basically,
@@ -157,14 +155,33 @@ permIndex
     -> IO ()
 --- permIndex !n !i !perm !count = undefined
 permIndex !n !i !perm !count = do
+
+    -- initialize perm to [1,2,..n]
+    let permInitLoop :: Int -> IO ()
+        permInitLoop k = do
+            unless (k >= VM.length perm) $ do
+                VM.unsafeWrite perm k $ k + 1
+                permInitLoop $ k + 1
+    permInitLoop 0
+
+    -- initialize perm to [1,2,..n]
+    forM_ [0..n-1] (\k -> VM.unsafeWrite perm k $ k + 1)
+
     let permIndexLoop
             :: Int
             -> IO ()
-        permIndexLoop i
-            | i == 0    = return ()
+        permIndexLoop k
+            | k == 0    = return ()
             | otherwise = do
-                permIndexLoop $ i - 1
+                -- bidniz logic
+                -- VM.unsafeWrite count k
+
+                permIndexLoop $ k - 1
     permIndexLoop $ n - 1
+
+  where
+    factorial 1 = 1
+    factorial z = z * factorial (z-1)
 
 
 
