@@ -73,8 +73,8 @@ fannkuch n = do
                 -- ^ Returns (checkSum, maxFlipsCount)
         fannkuchLoop !c !m !pc = do
             morePerms <- permNext perm n count
-            perm' <- V.freeze perm
-            traceIO $ show $ V.toList perm'
+            --- perm' <- V.freeze perm
+            --- traceIO $ show $ V.toList perm'
 
             if morePerms == False
             then return (c,m)
@@ -115,9 +115,10 @@ permNext perm !n !count = permNextLoop 1
     permNextLoop !i
         | i >= n = return False
         | otherwise = do
+
             perm0 <- VM.unsafeRead perm 0 -- perm0 is the 0th value in perm
             let
-                rotate -- left-rotate the first i places of perm.
+                rotate -- left-rotate the first (i+2) places of perm.
                     :: Int
                     -> IO ()
                 rotate j
@@ -127,6 +128,10 @@ permNext perm !n !count = permNextLoop 1
                         VM.unsafeWrite perm j permj1
                         rotate (j+1)
             rotate 0 -- left-rotate the first i places of perm
+
+            --- rotate' i perm
+            --- rotate' (i+2) perm
+
             counti <- VM.unsafeRead count i
             if counti >= i
             then do
@@ -135,6 +140,18 @@ permNext perm !n !count = permNextLoop 1
             else do
                 VM.unsafeWrite count i (counti+1)
                 return True
+
+rotate' -- left-rotate the first i places of perm where i >= 2.
+    :: Int -- ^ must be >= 2
+    -> VM.IOVector Int
+    -> IO ()
+rotate' 1 _ = return () -- TODO do we really need this case?
+rotate' i perm = do -- TODO memmove?
+    perm0 <- VM.unsafeRead perm 0
+    forM_ [0..i-2] $ \j -> do
+        permj <- VM.unsafeRead perm $ j+1
+        VM.unsafeWrite perm j permj
+    VM.unsafeWrite perm (i-1) perm0
 
 
 -- | Generate permutation from a permuation index.
@@ -156,28 +173,34 @@ permIndex
 --- permIndex !n !i !perm !count = undefined
 permIndex !n !i !perm !count = do
 
-    -- initialize perm to [1,2,..n]
-    let permInitLoop :: Int -> IO ()
-        permInitLoop k = do
-            unless (k >= VM.length perm) $ do
-                VM.unsafeWrite perm k $ k + 1
-                permInitLoop $ k + 1
-    permInitLoop 0
+    --- -- initialize perm to [1,2,..n]
+    --- let permInitLoop :: Int -> IO ()
+    ---     permInitLoop k = do
+    ---         unless (k >= VM.length perm) $ do
+    ---             VM.unsafeWrite perm k $ k + 1
+    ---             permInitLoop $ k + 1
+    --- permInitLoop 0
 
     -- initialize perm to [1,2,..n]
     forM_ [0..n-1] (\k -> VM.unsafeWrite perm k $ k + 1)
 
-    let permIndexLoop
-            :: Int
-            -> IO ()
-        permIndexLoop k
-            | k == 0    = return ()
-            | otherwise = do
-                -- bidniz logic
-                -- VM.unsafeWrite count k
+    --- let permIndexLoop
+    ---         :: Int
+    ---         -> IO ()
+    ---     permIndexLoop k
+    ---         | k == 0    = return ()
+    ---         | otherwise = do
+    ---             -- bidniz logic
+    ---             -- VM.unsafeWrite count k
 
-                permIndexLoop $ k - 1
-    permIndexLoop $ n - 1
+    ---             permIndexLoop $ k - 1
+    --- permIndexLoop $ n - 1
+
+    -- count[0] is always 0
+    VM.unsafeWrite count 0 0
+    forM_ [n-1..1] $ \ k -> do
+        let countk = (i `mod` factorial (k+1)) `div` factorial k
+        VM.unsafeWrite count k countk
 
   where
     factorial 1 = 1
