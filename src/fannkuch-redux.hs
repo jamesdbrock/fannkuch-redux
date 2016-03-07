@@ -33,6 +33,8 @@ main = do
         factorialTable :: V.Vector Int
         factorialTable = V.constructN n (\v -> if V.null v then 1 else (V.last v) * (V.length v + 1))
 
+    --- putStrLn $ show $ V.toList factorialTable
+
     --- let (maxFlipCount, checkSum) = fannkuchNaïve n
     --- putStr $ unlines
     ---     [ show checkSum
@@ -75,6 +77,22 @@ fannkuch n = do
             morePerms <- permNext perm n count
             --- perm' <- V.freeze perm
             --- traceIO $ show $ V.toList perm'
+            putStr "permIndex "
+            putStr $ show pc
+            putStr " perm "
+            putStr =<< showVec perm
+            putStr " count "
+            putStr =<< showVec count
+
+            permGen <- VM.new n
+            countGen <- VM.new n
+            permIndex n pc permGen countGen
+
+            putStr " permGen "
+            putStr =<< showVec permGen
+            putStr " countGen "
+            putStr =<< showVec countGen
+            putStrLn ""
 
             if morePerms == False
             then return (c,m)
@@ -96,6 +114,13 @@ fannkuch n = do
     fannkuchLoop 0 0 1
 
 
+showVec :: VM.IOVector Int -> IO String
+--- showVec x = do
+---     x' <- V.freeze x
+---     return $ show $ V.toList x'
+--- showVec x = V.freeze x >>= return . show . V.toList
+showVec x = return . show . V.toList =<< V.freeze x
+
 -- | Generate the next permutation from the count array.
 permNext
     :: VM.IOVector Int
@@ -116,21 +141,26 @@ permNext perm !n !count = permNextLoop 1
         | i >= n = return False
         | otherwise = do
 
-            perm0 <- VM.unsafeRead perm 0 -- perm0 is the 0th value in perm
-            let
-                rotate -- left-rotate the first (i+2) places of perm.
-                    :: Int
-                    -> IO ()
-                rotate j
-                    | j >= i = VM.unsafeWrite perm i perm0
-                    | otherwise = do
-                        !permj1 <- VM.unsafeRead perm (j+1)
-                        VM.unsafeWrite perm j permj1
-                        rotate (j+1)
-            rotate 0 -- left-rotate the first i places of perm
+            --- putStrLn . (\x -> "before rotate by " ++ show i ++ " " ++ x) =<< showVec perm
 
-            --- rotate' i perm
-            --- rotate' (i+2) perm
+
+            --- perm0 <- VM.unsafeRead perm 0 -- perm0 is the 0th value in perm
+            --- let
+            ---     rotate -- left-rotate the first (i+1) places of perm.
+            ---         :: Int
+            ---         -> IO ()
+            ---     rotate j
+            ---         | j >= i = VM.unsafeWrite perm i perm0
+            ---         | otherwise = do
+            ---             !permj1 <- VM.unsafeRead perm (j+1)
+            ---             VM.unsafeWrite perm j permj1
+            ---             rotate (j+1)
+            --- rotate 0 -- left-rotate the first i+1 places of perm
+
+            -- left-rotate the first i+1 places of perm
+            rotate' (i+1) perm
+
+            --- putStrLn . ("after  rotate      " ++) =<< showVec perm
 
             counti <- VM.unsafeRead count i
             if counti >= i
@@ -145,7 +175,7 @@ rotate' -- left-rotate the first i places of perm where i >= 2.
     :: Int -- ^ must be >= 2
     -> VM.IOVector Int
     -> IO ()
-rotate' 1 _ = return () -- TODO do we really need this case?
+--- rotate' 1 _ = return () -- TODO do we really need this case?
 rotate' i perm = do -- TODO memmove?
     perm0 <- VM.unsafeRead perm 0
     forM_ [0..i-2] $ \j -> do
@@ -156,14 +186,14 @@ rotate' i perm = do -- TODO memmove?
 
 -- | Generate permutation from a permuation index.
 --
--- It should be clear now how to generate a permutation and corresponding
--- count[] array from an arbitrary index. Basically,
---
--- count[k] = ( index % (k+1)! ) / k!
---
--- is the number of rotations we need to perform on elements 0..k.
--- Doing it in the descending order from n-1 to 1 gives us both the count[]
--- array and the permutation.
+-- > It should be clear now how to generate a permutation and corresponding
+-- > count[] array from an arbitrary index. Basically,
+-- >
+-- > count[k] = ( index % (k+1)! ) / k!
+-- >
+-- > is the number of rotations we need to perform on elements 0..k.
+-- > Doing it in the descending order from n-1 to 1 gives us both the count[]
+-- > array and the permutation.
 permIndex
     :: Int -- ^ Length of permuation.
     -> Int -- ^ ith permutation index.
@@ -173,37 +203,20 @@ permIndex
 --- permIndex !n !i !perm !count = undefined
 permIndex !n !i !perm !count = do
 
-    --- -- initialize perm to [1,2,..n]
-    --- let permInitLoop :: Int -> IO ()
-    ---     permInitLoop k = do
-    ---         unless (k >= VM.length perm) $ do
-    ---             VM.unsafeWrite perm k $ k + 1
-    ---             permInitLoop $ k + 1
-    --- permInitLoop 0
-
     -- initialize perm to [1,2,..n]
     forM_ [0..n-1] (\k -> VM.unsafeWrite perm k $ k + 1)
 
-    --- let permIndexLoop
-    ---         :: Int
-    ---         -> IO ()
-    ---     permIndexLoop k
-    ---         | k == 0    = return ()
-    ---         | otherwise = do
-    ---             -- bidniz logic
-    ---             -- VM.unsafeWrite count k
+    -- count[0] is always 0. zero-initialization is done by VM.new.
+    -- VM.unsafeWrite count 0 0
 
-    ---             permIndexLoop $ k - 1
-    --- permIndexLoop $ n - 1
-
-    -- count[0] is always 0
-    VM.unsafeWrite count 0 0
-    forM_ [n-1..1] $ \ k -> do
+    -- forM_ k = [n-1..1] over the count vector
+    forM_ (take (n-1) $ iterate (subtract 1) (n-1)) $ \ k -> do
         let countk = (i `mod` factorial (k+1)) `div` factorial k
         VM.unsafeWrite count k countk
+        replicateM_ countk $ rotate' (k+1) perm
 
   where
-    factorial 1 = 1
+    factorial 1 = 1 -- TODO factorialTable
     factorial z = z * factorial (z-1)
 
 
