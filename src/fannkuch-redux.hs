@@ -2,15 +2,18 @@
 
     http://benchmarksgame.alioth.debian.org/
 
-    contributed by Branimir Maksimovic
-    optimized/rewritten by Bryan O'Sullivan
-    modified by Gabriel Gonzalez
-    parallelized by James Brock
+    Contributed by Branimir Maksimovic.
+    Optimized/rewritten by Bryan O'Sullivan.
+    Modified by Gabriel Gonzalez.
+    Parallelized and rewritten by James Brock 2016.
+
+    This fannkuch-redux Haskell implementation uses mutable data vectors
+    for performance.
 -}
 
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
---- {-# LANGAUGE RecordWildCards #-}
+{-# LANGUAGE RecordWildCards #-}
 --- {-# LANGAUGE NamedFieldPuns #-}
 
 import System.Environment
@@ -19,6 +22,8 @@ import Data.Bits
 import Data.Monoid
 import Data.List
 import Control.Monad
+import Control.Concurrent
+import Control.Concurrent.Async
 
 import Debug.Trace
 
@@ -26,14 +31,166 @@ import qualified Data.Vector.Unboxed.Mutable as VM
 import qualified Data.Vector.Generic.Mutable as VG
 import qualified Data.Vector.Unboxed as V
 
-main = do
-    n <- getArgs >>= readIO.head
+--- factorialTable :: V.Vector Int
+--- factorialTable = V.empty
+---
+--- factorialTable' :: VM.IOVector Int
+--- -- factorialTable' = VM.new 0
 
+
+-- | Data for a slice of fannkuch-redux calculation work on a permutation
+-- index range.
+data FWork = FWork
+    { factorialTable :: !(V.Vector Int)
+        -- ^ Local factorial function lookup table.
+    , permIndexBegin :: !Int
+        -- ^ Lower bound inclusive of the permutation index for this work.
+    , permIndexEnd   :: !Int
+        -- ^ Upper bound exclusive of the permutation index for this work.
+    , perm           :: !(VM.IOVector Int)
+        -- ^ Permutation vector.
+    , tperm          :: !(VM.IOVector Int)
+        -- ^ Working temporary permutation vector.
+    , count          :: !(VM.IOVector Int)
+        -- ^ Count vector.
+        --
+        -- > To optimize the process I use an intermediate data structure,
+        -- > count[], which keeps count of how many rotations have been done
+        -- > at every level. Apparently, count[0] is always 0, as there is
+        -- > only one element at that level, which can't be rotated;
+        -- > count[1] = 0..1 for two elements,
+        -- > count[2] = 0..2 for three elements, etc.
+    }
+
+-- | Construct a slice of fannkuch-redux calculation work.
+mkFWork
+    :: Int
+        -- ^ n, the size of the total fannkuch-redux problem.
+    -> Int
+        -- ^ Lower bound inclusive of the permutation index for this work.
+    -> Int
+        -- ^ Upper bound exclusive of the permutation index for this work.
+    -> IO FWork
+mkFWork n pBegin pEnd = do
+
+    perm' <- VM.new n
+    tperm' <- VM.new n
+    count' <- VM.new n
+
+    permIndex n pBegin perm' count'
+
+    return $ FWork
+        --- { factorialTable = V.constructN n (\v -> if V.null v then 1 else (V.last v) * (V.length v + 1))
+        { factorialTable = V.generate n $ factorial . (+1)
+        , permIndexBegin = pBegin
+        , permIndexEnd   = pEnd
+        , perm           = perm'
+        , tperm          = tperm'
+        , count          = count'
+        }
+
+-- | Evaluate factorial function from the lookup table.
+factorialEval :: V.Vector Int -> Int -> Int
+factorialEval lookupTable x = V.unsafeIndex lookupTable $ x-1
+
+-- | work function with tail-recursion and mutable state.
+work
+    :: FWork
+        -- ^ Slice of fannkuch-redux to be calculated.
+    --- -> Int
+    ---     -- ^ Current permutation index, 1-based
+    --- -> Int
+    ---     -- ^ Current max flips count
+    --- -> Int
+    ---     -- ^ Current checksum
+    -> IO (Int, Int)
+        -- ^ (max flips count, checksum)
+work FWork{..} = do
     let
-        factorialTable :: V.Vector Int
-        factorialTable = V.constructN n (\v -> if V.null v then 1 else (V.last v) * (V.length v + 1))
+        go
+            :: Int
+                -- ^ Current permutation index, 1-based
+            -> Int
+                -- ^ Current max flips count
+            -> Int
+                -- ^ Current checksum
+            -> IO (Int, Int)
+                -- ^ (max flips count, checksum)
+        go pindex maxFlipCount checkSum
+            | pindex == permIndexEnd   = return (maxFlipCount, checkSum)
+            | otherwise                = do
+                --- _ <- permNext perm (VM.length perm) count
+                VM.unsafeCopy tperm perm
+                let countFlips !flips = {-# SCC "countFlips" #-} do
+                        tperm0 <- VM.unsafeRead tperm 0
+                        if tperm0 == 1
+                        then do
+                            _ <- permNext perm (VM.length perm) count
+                            go -- TODO pull this out of countFlips
+                                (pindex+1)
+                                (max maxFlipCount flips)
+                                (checkSum + (if pindex .&. 1 == 0 then flips else -flips))
+                        else do
+                            VG.reverse $ VM.unsafeSlice 0 tperm0 tperm
+                            countFlips (flips+1)
+                countFlips 0
 
-    --- putStrLn $ show $ V.toList factorialTable
+    -- go 0 0 1
+    go permIndexBegin 0 0
+
+
+
+
+fannkuch'
+    :: Int
+        -- ^ n, the size of the fannkuch-redux problem.
+    -> IO (Int, Int)
+        -- ^ (max flips count, checksum)
+fannkuch' n = do
+
+    -- number of permutations to consider
+    let numPermutations = factorial n
+
+    -- number of cores available for work.
+    numCapabilities <- getNumCapabilities
+
+    -- the smallest unit of work which is worth forking.
+    let workSizeMin = 1000
+
+    -- the amount of work which we would like to give to each core.
+    let workSize = max workSizeMin $ numPermutations `div` numCapabilities
+
+    -- divide up the permutations into workSize units
+    let workBoundaries = takeWhile (<=numPermutations) $ iterate (+workSize) 1
+
+    -- upper and lower permutation index bounds for each workSize unit
+    let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
+
+    traceIO $ "numPermutations " ++ show numPermutations
+    traceIO $ "numCapabilities " ++ show numCapabilities
+    traceIO $ "workRanges " ++ show workRanges
+
+    -- get ready to perform the work
+    works <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
+
+    -- perform the work
+    --- worked <- sequence $ fmap work works
+    worked <- mapConcurrently work works
+
+    -- gather up the results and return
+    return $ foldl1' (\(x0,y0) (x1,y1) -> (max x0 x1,y0+y1)) worked
+
+
+
+
+main = do
+    n <- getArgs >>= readIO . head
+
+    (maxFlipsCount', checkSum') <- fannkuch' n
+    putStr $ unlines
+        [ show checkSum'
+        , "Pfannkuchen'(" ++ show n ++ ") = " ++ show maxFlipsCount'
+        ]
 
     --- let (maxFlipCount, checkSum) = fannkuchNaïve n
     --- putStr $ unlines
@@ -75,24 +232,23 @@ fannkuch n = do
                 -- ^ Returns (checkSum, maxFlipsCount)
         fannkuchLoop !c !m !pc = do
             morePerms <- permNext perm n count
-            --- perm' <- V.freeze perm
-            --- traceIO $ show $ V.toList perm'
-            putStr "permIndex "
-            putStr $ show pc
-            putStr " perm "
-            putStr =<< showVec perm
-            putStr " count "
-            putStr =<< showVec count
 
-            permGen <- VM.new n
-            countGen <- VM.new n
-            permIndex n pc permGen countGen
+            --- putStr "permIndex "
+            --- putStr $ show pc
+            --- putStr " perm "
+            --- putStr =<< showVec perm
+            --- putStr " count "
+            --- putStr =<< showVec count
 
-            putStr " permGen "
-            putStr =<< showVec permGen
-            putStr " countGen "
-            putStr =<< showVec countGen
-            putStrLn ""
+            --- permGen <- VM.new n
+            --- countGen <- VM.new n
+            --- permIndex n pc permGen countGen
+
+            --- putStr " permGen "
+            --- putStr =<< showVec permGen
+            --- putStr " countGen "
+            --- putStr =<< showVec countGen
+            --- putStrLn ""
 
             if morePerms == False
             then return (c,m)
@@ -115,14 +271,10 @@ fannkuch n = do
 
 
 showVec :: VM.IOVector Int -> IO String
---- showVec x = do
----     x' <- V.freeze x
----     return $ show $ V.toList x'
---- showVec x = V.freeze x >>= return . show . V.toList
 showVec x = return . show . V.toList =<< V.freeze x
 
 -- | Generate the next permutation from the count array.
-permNext
+permNext -- TODO make a version that returns ()
     :: VM.IOVector Int
         -- ^ Vector to be mutated to next permuation.
     -> Int
@@ -184,7 +336,7 @@ rotate' i perm = do -- TODO memmove?
     VM.unsafeWrite perm (i-1) perm0
 
 
--- | Generate permutation from a permuation index.
+-- | From a permutation index, generate permutation and count.
 --
 -- > It should be clear now how to generate a permutation and corresponding
 -- > count[] array from an arbitrary index. Basically,
@@ -195,9 +347,9 @@ rotate' i perm = do -- TODO memmove?
 -- > Doing it in the descending order from n-1 to 1 gives us both the count[]
 -- > array and the permutation.
 permIndex
-    :: Int -- ^ Length of permuation.
+    :: Int -- ^ Length of permutation.
     -> Int -- ^ ith permutation index.
-    -> VM.IOVector Int -- ^ Mutable permutation output.
+    -> VM.IOVector Int -- ^ Mutable permutation vector output.
     -> VM.IOVector Int -- ^ Mutable count vector output.
     -> IO ()
 --- permIndex !n !i !perm !count = undefined
@@ -215,28 +367,31 @@ permIndex !n !i !perm !count = do
         VM.unsafeWrite count k countk
         replicateM_ countk $ rotate' (k+1) perm
 
+
+factorial :: Int -> Int
+factorial z0 = go z0 1
   where
-    factorial 1 = 1 -- TODO factorialTable
-    factorial z = z * factorial (z-1)
+    go 1 answer = answer
+    go z answer = go (z-1) (answer*z)
 
 
 
 
--- http://en.literateprograms.org/Kth_permutation_%28Haskell%29
-
--- radix representation
-rr :: Int -> Int -> [Int]
-rr 0 _ = []
-rr n k = k `mod` n : rr (n-1) (k `div` n)
---- rr n k = rr (n-1) (k `div` n) <> [k `mod` n]
-
--- direct representation from radix rep
-dfr :: [Int] -> [Int]
-dfr = foldr (\x rs -> x : [r + (if x <= r then 1 else 0) | r <- rs]) []
-
--- generate permutation
-perm :: [a] -> Int -> [a]
-perm xs k = [xs !! i | i <- dfr (rr (length xs) k)]
+--- -- http://en.literateprograms.org/Kth_permutation_%28Haskell%29
+---
+--- -- radix representation
+--- rr :: Int -> Int -> [Int]
+--- rr 0 _ = []
+--- rr n k = k `mod` n : rr (n-1) (k `div` n)
+--- --- rr n k = rr (n-1) (k `div` n) <> [k `mod` n]
+---
+--- -- direct representation from radix rep
+--- dfr :: [Int] -> [Int]
+--- dfr = foldr (\x rs -> x : [r + (if x <= r then 1 else 0) | r <- rs]) []
+---
+--- -- generate permutation
+--- perm :: [a] -> Int -> [a]
+--- perm xs k = [xs !! i | i <- dfr (rr (length xs) k)]
 
 
 
