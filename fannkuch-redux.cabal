@@ -13,15 +13,25 @@ build-type:          Simple
 -- extra-source-files:
 cabal-version:       >=1.10
 
-executable fannkuch-redux-exe
+-- executable for new fannkuch-redux
+executable fannkuch-redux
   hs-source-dirs:      src
   main-is:             fannkuch-redux.hs
   -- ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   -- ghc-options:         -fllvm -funbox-strict-fields -O2 -threaded -rtsopts -with-rtsopts=-N
-  ghc-options:         -fllvm -funbox-strict-fields -O2 -threaded -rtsopts
   -- ghc-options:         -funbox-strict-fields -O2 -threaded -rtsopts -with-rtsopts=-N
   -- ghc-options:         -fllvm -funbox-strict-fields -O2 -rtsopts
+  ghc-options:         -fllvm -O2 -threaded -rtsopts -Wall
   build-depends:       base,vector,async
+  default-language:    Haskell2010
+
+-- executable for fannkuch-redux Haskell GHC #4
+-- http://benchmarksgame.alioth.debian.org/u64q/program.php?test=fannkuchredux&lang=ghc&id=4
+executable fannkuch-redux-4
+  hs-source-dirs:      src
+  main-is:             fannkuch-redux-4.hs
+  ghc-options:         -fllvm -O2 -XBangPatterns -threaded -rtsopts
+  build-depends:       base,vector
   default-language:    Haskell2010
 
 source-repository head

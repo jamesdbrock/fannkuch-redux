@@ -8,7 +8,7 @@
     Parallelized and rewritten by James Brock 2016.
 
     This fannkuch-redux Haskell implementation uses mutable data vectors
-    for performance.
+    for speed.
 -}
 
 {-
@@ -129,6 +129,7 @@ import Text.Printf
 import Data.Bits
 import Data.Monoid
 import Data.List
+import Data.Word
 import Control.Monad
 import Control.Concurrent
 import Control.Concurrent.Async
@@ -142,6 +143,7 @@ import qualified Data.Vector.Generic.Mutable as VG
 import qualified Data.Vector.Unboxed as V
 
 
+main :: IO ()
 main = do
     n <- readIO . head =<< getArgs
 
@@ -190,11 +192,11 @@ fannkuch !n = do
     --- getCPUTime >>= print
 
     -- perform the work
-    -- worked <- mapConcurrently work works
-    worked <- sequence $ fmap work works
+    worked <- mapConcurrently work works
+    -- worked <- sequence $ fmap work works -- this is ~4% faster in the -N1 case on my NUC
 
     -- gather up the results and return
-    return $ foldl1' (\(x0,y0) (x1,y1) -> (max x0 x1,y0+y1)) worked
+    return $ foldl1' (\(fc0,cs0) (fc1,cs1) -> (max fc0 fc1, cs0+cs1)) worked
 
 
 -- showVec :: VM.IOVector Int -> IO String
@@ -242,6 +244,10 @@ mkFWork
     -> IO FWork
 mkFWork !n !pBegin !pEnd = do
 
+    -- try to make sure no two FWorks inhabit the same cache line
+    -- let !cacheLineFiller = V.replicate 64 0 :: V.Vector Word8
+
+    -- perm'  <- seq cacheLineFiller $ VM.new n
     perm'  <- VM.new n
     tperm' <- VM.new n
     count' <- VM.new n
@@ -267,43 +273,69 @@ work
         -- ^ Slice of fannkuch-redux to be calculated.
     -> IO (Int, Int)
         -- ^ (max flips count, checksum)
-work !FWork{..} = go permIndexBegin 0 0
-  where
-    !n = VM.length perm
-    --- !permIndexEnd' = permIndexEnd
-    go
-        :: Int
-            -- ^ Current permutation index, 1-based
-        -> Int
-            -- ^ Current max flips count
-        -> Int
-            -- ^ Current checksum
-        -> IO (Int, Int)
-            -- ^ (max flips count, checksum)
-    go !pindex !maxFlipCount !checkSum
-        | pindex == permIndexEnd   = return (maxFlipCount, checkSum)
-        | otherwise                = do
-            !flips <- countFlips
-            permNext n perm count -- TODO get rid of length
-            go
-                (pindex+1)
-                (max maxFlipCount flips)
-                (checkSum + (if pindex .&. 1 == 0 then flips else -flips))
 
-    --- {-# INLINE countFlips #-}
-    countFlips :: IO Int
-    countFlips = do
-        VM.unsafeCopy tperm perm
-        goFlips 0
-      where
-        goFlips :: Int -> IO Int
-        goFlips !flips = do
-            !tperm0 <- VM.unsafeRead tperm 0
-            if tperm0 == 1
-            then return flips
-            else do
-                VG.reverse $ VM.unsafeSlice 0 tperm0 tperm
-                goFlips (flips+1)
+work !FWork{..} = do
+    let
+        loop :: Int -> Int -> Int -> IO(Int,Int)
+        loop !c !m !pc
+            | pc == (permIndexEnd-1) = return (m, c)
+            | otherwise = do
+            --- b <- next_permutation perm n cnt
+            --
+            -- if b == False
+                --then return (c,m)
+                --- else do
+                permNext (VM.length perm) perm count
+                VM.unsafeCopy tperm perm
+                let count_flips !flips = {-# SCC "count_flips" #-} do
+                        f <- VM.unsafeRead tperm 0
+                        if f == 1
+                        then loop (c + (if pc .&. 1 == 0 then flips else -flips))
+                                    (max m flips)
+                                    (pc+1)
+                        else do
+                            VG.reverse $ VM.unsafeSlice 0 f tperm
+                            count_flips (flips+1)
+                count_flips 0
+    loop 0 0 (permIndexBegin-1)
+
+--- work !FWork{..} = go permIndexBegin 0 0
+---   where
+---     !n = VM.length perm
+---     --- !permIndexEnd' = permIndexEnd
+---     go
+---         :: Int
+---             -- ^ Current permutation index, 1-based
+---         -> Int
+---             -- ^ Current max flips count
+---         -> Int
+---             -- ^ Current checksum
+---         -> IO (Int, Int)
+---             -- ^ (max flips count, checksum)
+---     go !pindex !maxFlipCount !checkSum
+---         | pindex == permIndexEnd   = return (maxFlipCount, checkSum)
+---         | otherwise                = do
+---             !flips <- countFlips
+---             permNext n perm count -- TODO get rid of length
+---             go
+---                 (pindex+1)
+---                 (max maxFlipCount flips)
+---                 (checkSum + (if pindex .&. 1 == 0 then flips else -flips))
+---
+---     --- {-# INLINE countFlips #-}
+---     countFlips :: IO Int
+---     countFlips = do
+---         VM.unsafeCopy tperm perm
+---         goFlips 0
+---       where
+---         goFlips :: Int -> IO Int
+---         goFlips !flips = do
+---             !tperm0 <- VM.unsafeRead tperm 0
+---             if tperm0 == 1
+---             then return flips
+---             else do
+---                 VG.reverse $ VM.unsafeSlice 0 tperm0 tperm
+---                 goFlips (flips+1)
 
 
 
