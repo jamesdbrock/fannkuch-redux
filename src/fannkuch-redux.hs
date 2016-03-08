@@ -78,11 +78,49 @@ whitehole_spin: 0
 gen[0].sync: 0
 gen[1].sync: 0
 
+
+
+
+on llvm build commit:
+
+jdb@hotchip:~/work/fannkuch-redux$ bin/fannkuch-redux-exe 12 +RTS -s -N1
+3968050
+Pfannkuchen(12) = 65
+  44,418,525,016 bytes allocated in the heap
+      46,183,880 bytes copied during GC
+          56,720 bytes maximum residency (2 sample(s))
+          25,200 bytes maximum slop
+               1 MB total memory in use (0 MB lost due to fragmentation)
+
+                                     Tot time (elapsed)  Avg pause  Max pause
+  Gen  0     84802 colls,     0 par    0.136s   0.305s     0.0000s    0.0001s
+  Gen  1         2 colls,     0 par    0.000s   0.000s     0.0002s    0.0003s
+
+  TASKS: 4 (1 bound, 3 peak workers (3 total), using -N1)
+
+  SPARKS: 0 (0 converted, 0 overflowed, 0 dud, 0 GC'd, 0 fizzled)
+
+  INIT    time    0.000s  (  0.001s elapsed)
+  MUT     time   48.633s  ( 48.607s elapsed)
+  GC      time    0.136s  (  0.306s elapsed)
+  EXIT    time    0.001s  (  0.000s elapsed)
+  Total   time   48.770s  ( 48.914s elapsed)
+
+  Alloc rate    913,345,682 bytes per MUT second
+
+  Productivity  99.7% of total user, 99.4% of total elapsed
+
+gc_alloc_block_sync: 0
+whitehole_spin: 0
+gen[0].sync: 0
+gen[1].sync: 0
+
 -}
 
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# OPTIONS_GHC -funbox-strict-fields #-}
 
 module Main(main) where
 
@@ -94,6 +132,8 @@ import Data.List
 import Control.Monad
 import Control.Concurrent
 import Control.Concurrent.Async
+-- import Data.Time
+import System.CPUTime
 
 import Debug.Trace
 
@@ -113,6 +153,50 @@ main = do
         ]
 
 
+fannkuch
+    :: Int
+        -- ^ n, the size of the fannkuch-redux problem.
+    -> IO (Int, Int)
+        -- ^ (max flips count, checksum)
+fannkuch !n = do
+
+    --- getCurrentTime >>= print
+    --- getCPUTime >>= print
+
+    -- number of permutations to consider
+    let numPermutations = factorial n
+
+    -- number of cores available for work.
+    numCapabilities <- getNumCapabilities
+
+    -- the smallest unit of work which is worth forking.
+    let workSizeMin = 1000
+
+    -- the amount of work which we would like to give to each core.
+    let workSize = max workSizeMin $ numPermutations `div` numCapabilities
+
+    -- divide up the permutations into workSize units
+    let workBoundaries = takeWhile (<=numPermutations) $ iterate (+workSize) 1
+
+    -- upper and lower permutation index bounds for each workSize unit
+    let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
+
+    -- get ready to perform the work
+    works :: [FWork] <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
+
+    --- print $ length works
+
+    --- getCurrentTime >>= print
+    --- getCPUTime >>= print
+
+    -- perform the work
+    -- worked <- mapConcurrently work works
+    worked <- sequence $ fmap work works
+
+    -- gather up the results and return
+    return $ foldl1' (\(x0,y0) (x1,y1) -> (max x0 x1,y0+y1)) worked
+
+
 -- showVec :: VM.IOVector Int -> IO String
 -- showVec x = return . show . V.toList =<< V.freeze x
 
@@ -126,9 +210,9 @@ factorial z0 = go z0 1
 -- | Data for a slice of fannkuch-redux calculation work on a permutation
 -- index range.
 data FWork = FWork
-    { factorialTable :: !(V.Vector Int)
-        -- ^ Local factorial function lookup table.
-    , permIndexBegin :: !Int
+    --- { factorialTable :: !(V.Vector Int)
+    ---     -- ^ Local factorial function lookup table.
+    { permIndexBegin :: !Int
         -- ^ Lower bound inclusive of the permutation index for this work.
     , permIndexEnd   :: !Int
         -- ^ Upper bound exclusive of the permutation index for this work.
@@ -165,17 +249,17 @@ mkFWork !n !pBegin !pEnd = do
     permIndex n pBegin perm' count'
 
     return $ FWork
-        { factorialTable = V.generate n $ factorial . (+1)
-        , permIndexBegin = pBegin
+        --- { factorialTable = V.generate n $ factorial . (+1)
+        { permIndexBegin = pBegin
         , permIndexEnd   = pEnd
         , perm           = perm'
         , tperm          = tperm'
         , count          = count'
         }
 
--- | Evaluate factorial function from the lookup table.
-factorialEval :: V.Vector Int -> Int -> Int
-factorialEval lookupTable !x = V.unsafeIndex lookupTable $ x-1
+--- -- | Evaluate factorial function from the lookup table.
+--- factorialEval :: V.Vector Int -> Int -> Int
+--- factorialEval lookupTable !x = V.unsafeIndex lookupTable $ x-1
 
 -- | work function with tail-recursion and mutable state.
 work
@@ -185,6 +269,8 @@ work
         -- ^ (max flips count, checksum)
 work !FWork{..} = go permIndexBegin 0 0
   where
+    !n = VM.length perm
+    --- !permIndexEnd' = permIndexEnd
     go
         :: Int
             -- ^ Current permutation index, 1-based
@@ -197,13 +283,14 @@ work !FWork{..} = go permIndexBegin 0 0
     go !pindex !maxFlipCount !checkSum
         | pindex == permIndexEnd   = return (maxFlipCount, checkSum)
         | otherwise                = do
-            flips <- countFlips
-            permNext (VM.length perm) perm count -- TODO get rid of length
+            !flips <- countFlips
+            permNext n perm count -- TODO get rid of length
             go
                 (pindex+1)
                 (max maxFlipCount flips)
                 (checkSum + (if pindex .&. 1 == 0 then flips else -flips))
 
+    --- {-# INLINE countFlips #-}
     countFlips :: IO Int
     countFlips = do
         VM.unsafeCopy tperm perm
@@ -211,7 +298,7 @@ work !FWork{..} = go permIndexBegin 0 0
       where
         goFlips :: Int -> IO Int
         goFlips !flips = do
-            tperm0 <- VM.unsafeRead tperm 0
+            !tperm0 <- VM.unsafeRead tperm 0
             if tperm0 == 1
             then return flips
             else do
@@ -219,44 +306,9 @@ work !FWork{..} = go permIndexBegin 0 0
                 goFlips (flips+1)
 
 
-fannkuch
-    :: Int
-        -- ^ n, the size of the fannkuch-redux problem.
-    -> IO (Int, Int)
-        -- ^ (max flips count, checksum)
-fannkuch !n = do
-
-    -- number of permutations to consider
-    let numPermutations = factorial n
-
-    -- number of cores available for work.
-    numCapabilities <- getNumCapabilities
-
-    -- the smallest unit of work which is worth forking.
-    let workSizeMin = 1000
-
-    -- the amount of work which we would like to give to each core.
-    let workSize = max workSizeMin $ numPermutations `div` numCapabilities
-
-    -- divide up the permutations into workSize units
-    let workBoundaries = takeWhile (<=numPermutations) $ iterate (+workSize) 1
-
-    -- upper and lower permutation index bounds for each workSize unit
-    let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
-
-    -- get ready to perform the work
-    works <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
-
-    -- perform the work
-    worked <- mapConcurrently work works
-
-    -- gather up the results and return
-    return $ foldl1' (\(x0,y0) (x1,y1) -> (max x0 x1,y0+y1)) worked
-
-
 
 -- | Generate the next permutation from the count array.
-permNext -- TODO make a version that returns (), and uses the factorialTable
+permNext
     :: Int
         -- ^ Length of permutation.
     -> VM.IOVector Int
@@ -274,7 +326,7 @@ permNext !n !perm !count = go 1
         | otherwise = do
 
             -- left-rotate the first i+1 places of perm
-            rotate' perm $ i+1
+            rotateLeft perm $ i+1
 
             counti <- VM.unsafeRead count i
             if counti >= i
@@ -286,20 +338,27 @@ permNext !n !perm !count = go 1
                 return ()
 
 -- | Left-rotate the first i places of perm where i >= 2.
-rotate'
+rotateLeft
     :: VM.IOVector Int
     -> Int
         -- ^ must be >= 2
     -> IO ()
-rotate' !perm !i = do -- TODO memmove?
-    perm0 <- VM.unsafeRead perm 0
+rotateLeft !perm !i = do
+    !perm0 <- VM.unsafeRead perm 0
+
+    -- this is a tiny bit faster than VM.unsafeMove
     forM_ [0..i-2] $ \j -> do
         permj <- VM.unsafeRead perm $ j+1
         VM.unsafeWrite perm j permj
+
+    --- let !pFrom = VM.unsafeSlice 1 (i-1) perm
+    --- let !pTo   = VM.unsafeSlice 0 (i-1) perm
+    --- VM.unsafeMove pTo pFrom
+
     VM.unsafeWrite perm (i-1) perm0
 
 
--- | From a permutation index, generate permutation and count.
+-- | From a permutation index, generate permutation vector and count vector.
 --
 -- > It should be clear now how to generate a permutation and corresponding
 -- > count[] array from an arbitrary index. Basically,
@@ -327,7 +386,7 @@ permIndex !n !i !perm !count = do
     forM_ (take (n-1) $ iterate (subtract 1) (n-1)) $ \ k -> do
         let countk = (i `mod` factorial (k+1)) `div` factorial k
         VM.unsafeWrite count k countk
-        replicateM_ countk $ rotate' perm $ k+1
+        replicateM_ countk $ rotateLeft perm $ k+1
 
 
 
