@@ -13,6 +13,9 @@ build-type:          Simple
 -- extra-source-files:
 cabal-version:       >=1.10
 
+-- This is annoying, but it seems that fannkuch-redux-4 runs 2-4% faster when it is the only executable in this cabal file.
+-- And fannkuch-redux doesn't seem to get the same speedup when it's the only executable.
+
 -- executable for new fannkuch-redux
 executable fannkuch-redux
   hs-source-dirs:      src
@@ -30,8 +33,16 @@ executable fannkuch-redux
 executable fannkuch-redux-4
   hs-source-dirs:      src
   main-is:             fannkuch-redux-4.hs
-  ghc-options:         -fllvm -O2 -XBangPatterns -threaded -rtsopts
+  ghc-options:         -fllvm -O2 -XBangPatterns -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base,vector
+  default-language:    Haskell2010
+
+-- executable for fannkuch-redux-naive
+executable fannkuch-redux-naive
+  hs-source-dirs:      src
+  main-is:             fannkuch-redux-naive.hs
+  ghc-options:         -fllvm -O2 -rtsopts -Wall
+  build-depends:       base
   default-language:    Haskell2010
 
 source-repository head

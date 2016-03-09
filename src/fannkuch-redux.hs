@@ -7,115 +7,10 @@
     Modified by Gabriel Gonzalez.
     Parallelized and rewritten by James Brock 2016.
 
-    This fannkuch-redux Haskell implementation uses mutable data vectors
+    This fannkuch-redux Haskell implementation uses mutable vectors
     for speed.
 -}
 
-{-
-jdb@hotchip:~/work/fannkuch-redux$ bin/fannkuch-redux-exe 12 +RTS -s -N4
-3968050
-Pfannkuchen(12) = 65
-  34,002,092,608 bytes allocated in the heap
-      32,506,128 bytes copied during GC
-          89,976 bytes maximum residency (2 sample(s))
-          49,288 bytes maximum slop
-               3 MB total memory in use (0 MB lost due to fragmentation)
-
-                                     Tot time (elapsed)  Avg pause  Max pause
-  Gen  0     20281 colls, 20281 par    0.344s   0.147s     0.0000s    0.0006s
-  Gen  1         2 colls,     1 par    0.001s   0.000s     0.0001s    0.0002s
-
-  Parallel GC work balance: 24.19% (serial 0%, perfect 100%)
-
-  TASKS: 10 (1 bound, 9 peak workers (9 total), using -N4)
-
-  SPARKS: 0 (0 converted, 0 overflowed, 0 dud, 0 GC'd, 0 fizzled)
-
-  INIT    time    0.004s  (  0.003s elapsed)
-  MUT     time   60.612s  ( 15.902s elapsed)
-  GC      time    0.345s  (  0.147s elapsed)
-  EXIT    time    0.001s  (  0.000s elapsed)
-  Total   time   60.964s  ( 16.053s elapsed)
-
-  Alloc rate    560,981,939 bytes per MUT second
-
-  Productivity  99.4% of total user, 377.6% of total elapsed
-
-gc_alloc_block_sync: 29203
-whitehole_spin: 0
-gen[0].sync: 0
-gen[1].sync: 2
-
-jdb@hotchip:~/work/fannkuch-redux$ bin/fannkuch-redux-exe 12 +RTS -s -N1
-3968050
-Pfannkuchen(12) = 65
-  34,002,032,576 bytes allocated in the heap
-      35,574,208 bytes copied during GC
-          56,720 bytes maximum residency (2 sample(s))
-          25,200 bytes maximum slop
-               1 MB total memory in use (0 MB lost due to fragmentation)
-
-                                     Tot time (elapsed)  Avg pause  Max pause
-  Gen  0     65223 colls,     0 par    0.107s   0.252s     0.0000s    0.0001s
-  Gen  1         2 colls,     0 par    0.000s   0.000s     0.0002s    0.0002s
-
-  TASKS: 4 (1 bound, 3 peak workers (3 total), using -N1)
-
-  SPARKS: 0 (0 converted, 0 overflowed, 0 dud, 0 GC'd, 0 fizzled)
-
-  INIT    time    0.000s  (  0.001s elapsed)
-  MUT     time   57.289s  ( 57.220s elapsed)
-  GC      time    0.107s  (  0.252s elapsed)
-  EXIT    time    0.001s  (  0.000s elapsed)
-  Total   time   57.397s  ( 57.473s elapsed)
-
-  Alloc rate    593,513,991 bytes per MUT second
-
-  Productivity  99.8% of total user, 99.7% of total elapsed
-
-gc_alloc_block_sync: 0
-whitehole_spin: 0
-gen[0].sync: 0
-gen[1].sync: 0
-
-
-
-
-on llvm build commit:
-
-jdb@hotchip:~/work/fannkuch-redux$ bin/fannkuch-redux-exe 12 +RTS -s -N1
-3968050
-Pfannkuchen(12) = 65
-  44,418,525,016 bytes allocated in the heap
-      46,183,880 bytes copied during GC
-          56,720 bytes maximum residency (2 sample(s))
-          25,200 bytes maximum slop
-               1 MB total memory in use (0 MB lost due to fragmentation)
-
-                                     Tot time (elapsed)  Avg pause  Max pause
-  Gen  0     84802 colls,     0 par    0.136s   0.305s     0.0000s    0.0001s
-  Gen  1         2 colls,     0 par    0.000s   0.000s     0.0002s    0.0003s
-
-  TASKS: 4 (1 bound, 3 peak workers (3 total), using -N1)
-
-  SPARKS: 0 (0 converted, 0 overflowed, 0 dud, 0 GC'd, 0 fizzled)
-
-  INIT    time    0.000s  (  0.001s elapsed)
-  MUT     time   48.633s  ( 48.607s elapsed)
-  GC      time    0.136s  (  0.306s elapsed)
-  EXIT    time    0.001s  (  0.000s elapsed)
-  Total   time   48.770s  ( 48.914s elapsed)
-
-  Alloc rate    913,345,682 bytes per MUT second
-
-  Productivity  99.7% of total user, 99.4% of total elapsed
-
-gc_alloc_block_sync: 0
-whitehole_spin: 0
-gen[0].sync: 0
-gen[1].sync: 0
-
--}
 
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -125,22 +20,14 @@ gen[1].sync: 0
 module Main(main) where
 
 import System.Environment
-import Text.Printf
 import Data.Bits
-import Data.Monoid
 import Data.List
-import Data.Word
 import Control.Monad
 import Control.Concurrent
 import Control.Concurrent.Async
--- import Data.Time
-import System.CPUTime
-
-import Debug.Trace
 
 import qualified Data.Vector.Unboxed.Mutable as VM
 import qualified Data.Vector.Generic.Mutable as VG
-import qualified Data.Vector.Unboxed as V
 
 
 main :: IO ()
@@ -162,9 +49,6 @@ fannkuch
         -- ^ (max flips count, checksum)
 fannkuch !n = do
 
-    --- getCurrentTime >>= print
-    --- getCPUTime >>= print
-
     -- number of permutations to consider
     let numPermutations = factorial n
 
@@ -184,12 +68,8 @@ fannkuch !n = do
     let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
 
     -- get ready to perform the work
-    works :: [FWork] <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
-
-    --- print $ length works
-
-    --- getCurrentTime >>= print
-    --- getCPUTime >>= print
+    -- TODO make sure no two FWorks have memory in the same cache line
+    works <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
 
     -- perform the work
     worked <- mapConcurrently work works
@@ -198,9 +78,6 @@ fannkuch !n = do
     -- gather up the results and return
     return $ foldl1' (\(fc0,cs0) (fc1,cs1) -> (max fc0 fc1, cs0+cs1)) worked
 
-
--- showVec :: VM.IOVector Int -> IO String
--- showVec x = return . show . V.toList =<< V.freeze x
 
 factorial :: Int -> Int
 factorial z0 = go z0 1
@@ -212,8 +89,6 @@ factorial z0 = go z0 1
 -- | Data for a slice of fannkuch-redux calculation work on a permutation
 -- index range.
 data FWork = FWork
-    --- { factorialTable :: !(V.Vector Int)
-    ---     -- ^ Local factorial function lookup table.
     { permIndexBegin :: !Int
         -- ^ Lower bound inclusive of the permutation index for this work.
     , permIndexEnd   :: !Int
@@ -244,10 +119,6 @@ mkFWork
     -> IO FWork
 mkFWork !n !pBegin !pEnd = do
 
-    -- try to make sure no two FWorks inhabit the same cache line
-    -- let !cacheLineFiller = V.replicate 64 0 :: V.Vector Word8
-
-    -- perm'  <- seq cacheLineFiller $ VM.new n
     perm'  <- VM.new n
     tperm' <- VM.new n
     count' <- VM.new n
@@ -255,7 +126,6 @@ mkFWork !n !pBegin !pEnd = do
     permIndex n pBegin perm' count'
 
     return $ FWork
-        --- { factorialTable = V.generate n $ factorial . (+1)
         { permIndexBegin = pBegin
         , permIndexEnd   = pEnd
         , perm           = perm'
@@ -263,80 +133,76 @@ mkFWork !n !pBegin !pEnd = do
         , count          = count'
         }
 
---- -- | Evaluate factorial function from the lookup table.
---- factorialEval :: V.Vector Int -> Int -> Int
---- factorialEval lookupTable !x = V.unsafeIndex lookupTable $ x-1
-
 -- | work function with tail-recursion and mutable state.
 work
     :: FWork
         -- ^ Slice of fannkuch-redux to be calculated.
     -> IO (Int, Int)
         -- ^ (max flips count, checksum)
-
 work !FWork{..} = do
     let
         loop :: Int -> Int -> Int -> IO(Int,Int)
         loop !c !m !pc
             | pc == (permIndexEnd-1) = return (m, c)
             | otherwise = do
-            --- b <- next_permutation perm n cnt
-            --
-            -- if b == False
-                --then return (c,m)
-                --- else do
                 permNext (VM.length perm) perm count
                 VM.unsafeCopy tperm perm
                 let count_flips !flips = {-# SCC "count_flips" #-} do
                         f <- VM.unsafeRead tperm 0
                         if f == 1
-                        then loop (c + (if pc .&. 1 == 0 then flips else -flips))
-                                    (max m flips)
-                                    (pc+1)
+                        then loop
+                                (c + (if pc .&. 1 == 0 then flips else -flips))
+                                (max m flips)
+                                (pc+1)
                         else do
                             VG.reverse $ VM.unsafeSlice 0 f tperm
                             count_flips (flips+1)
                 count_flips 0
     loop 0 0 (permIndexBegin-1)
 
---- work !FWork{..} = go permIndexBegin 0 0
----   where
----     !n = VM.length perm
----     --- !permIndexEnd' = permIndexEnd
----     go
----         :: Int
----             -- ^ Current permutation index, 1-based
----         -> Int
----             -- ^ Current max flips count
----         -> Int
----             -- ^ Current checksum
----         -> IO (Int, Int)
----             -- ^ (max flips count, checksum)
----     go !pindex !maxFlipCount !checkSum
----         | pindex == permIndexEnd   = return (maxFlipCount, checkSum)
----         | otherwise                = do
----             !flips <- countFlips
----             permNext n perm count -- TODO get rid of length
----             go
----                 (pindex+1)
----                 (max maxFlipCount flips)
----                 (checkSum + (if pindex .&. 1 == 0 then flips else -flips))
----
----     --- {-# INLINE countFlips #-}
----     countFlips :: IO Int
----     countFlips = do
----         VM.unsafeCopy tperm perm
----         goFlips 0
----       where
----         goFlips :: Int -> IO Int
----         goFlips !flips = do
----             !tperm0 <- VM.unsafeRead tperm 0
----             if tperm0 == 1
----             then return flips
----             else do
----                 VG.reverse $ VM.unsafeSlice 0 tperm0 tperm
----                 goFlips (flips+1)
+-- | work function with tail-recursion and mutable state.
+work'
+    :: FWork
+        -- ^ Slice of fannkuch-redux to be calculated.
+    -> IO (Int, Int)
+        -- ^ (max flips count, checksum)
+work' !FWork{..} = go permIndexBegin 0 0
+  where
+    !n = VM.length perm
+    --- !permIndexEnd' = permIndexEnd
+    go
+        :: Int
+            -- ^ Current permutation index, 1-based
+        -> Int
+            -- ^ Current max flips count
+        -> Int
+            -- ^ Current checksum
+        -> IO (Int, Int)
+            -- ^ (max flips count, checksum)
+    go !pindex !maxFlipCount !checkSum
+        | pindex == permIndexEnd   = return (maxFlipCount, checkSum)
+        | otherwise                = do
+            !flips <- countFlips
+            permNext n perm count -- TODO get rid of length
+            go
+                (pindex+1)
+                (max maxFlipCount flips)
+                (checkSum + (if pindex .&. 1 == 0 then flips else -flips))
 
+    --- {-# INLINE countFlips #-}
+    countFlips :: IO Int
+    countFlips = do
+        VM.unsafeCopy tperm perm
+        goFlips 0
+      where
+        goFlips :: Int -> IO Int
+        goFlips !flips = do
+            !tperm0 <- VM.unsafeRead tperm 0
+            if tperm0 == 1
+            then return flips
+            else do
+                VG.reverse $ VM.unsafeSlice 0 tperm0 tperm
+                goFlips (flips+1)
 
 
 -- | Generate the next permutation from the count array.
@@ -351,7 +217,7 @@ permNext
 permNext !n !perm !count = go 1
   where
     go
-        :: Int -- i loops over [1..n-1]
+        :: Int -- ^ i loops over [1..n-1]
         -> IO ()
     go !i
         | i >= n    = return ()
@@ -420,33 +286,4 @@ permIndex !n !i !perm !count = do
         VM.unsafeWrite count k countk
         replicateM_ countk $ rotateLeft perm $ k+1
 
-
-
--- fannkuchNaïve doesn't work because the permutation order is different than the
--- reference implementation, so the evenness assigned to each permutation is
--- wrong and the checksum comes out wrong.
-fannkuchNaïve
-    :: Int
-    -> (Int, Int) -- ^ (maximum flip count, checksum)
-fannkuchNaïve 0 = (0,0)
-fannkuchNaïve n = (maxFlipCountFinal, checkSumFinal)
-  where
-
-    (maxFlipCountFinal, checkSumFinal, _) = foldl' fkAccum (0, 0, 0) $ permutations [1..n]
-
-    fkAccum :: (Int, Int, Int) -> [Int] -> (Int, Int, Int)
-    fkAccum (!maxFlipCount, !checkSum, !permIndex) xs = (maxFlipCount', checkSum', permIndex')
-      where
-        !fcnt          = flipsCount xs
-        !maxFlipCount' = max fcnt maxFlipCount
-        !checkSum'     = checkSum + if even permIndex then fcnt else -fcnt
-        !permIndex'    = permIndex + 1
-
-    flipsCount :: [Int] -> Int
-    flipsCount xs0 = go xs0 0
-      where
-        go (1:_) !cnt = cnt
-        go xs@(x:_) !cnt = go (reverse lxs ++ rxs) (cnt + 1)
-          where
-            (lxs, rxs) = splitAt x xs
 
