@@ -52,31 +52,55 @@ fannkuch !n = do
     -- number of permutations to consider
     let numPermutations = factorial n
 
+    -- (mkFWork n 1 $ numPermutations+1) >>= work
+
     -- number of cores available for work.
     numCapabilities <- getNumCapabilities
 
-    -- the smallest unit of work which is worth forking.
-    let workSizeMin = 1000
+    if True -- numCapabilities == 1
+    then do
+        -- work =<< (mkFWork n 1 $ numPermutations+1)
 
-    -- the amount of work which we would like to give to each core.
-    let workSize = max workSizeMin $ numPermutations `div` numCapabilities
+        -- fwork <- mkFWork n 1 $ numPermutations+1
+        -- work fwork
 
-    -- divide up the permutations into workSize units
-    let workBoundaries = takeWhile (<=numPermutations) $ iterate (+workSize) 1
+        -- (mkFWork n 1 $ numPermutations+1) >>= work
 
-    -- upper and lower permutation index bounds for each workSize unit
-    let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
+        fwork <- mkFWork n 1 $ numPermutations+1
+        worked <- sequence $ fmap work [fwork]
+        return $ head worked
 
-    -- get ready to perform the work
-    -- TODO make sure no two FWorks have memory in the same cache line
-    works <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
+    else do
 
-    -- perform the work
-    worked <- mapConcurrently work works
-    -- worked <- sequence $ fmap work works -- this is ~4% faster in the -N1 case on my NUC
+        -- the smallest unit of work which is worth forking.
+        let workSizeMin = 1000
 
-    -- gather up the results and return
-    return $ foldl1' (\(fc0,cs0) (fc1,cs1) -> (max fc0 fc1, cs0+cs1)) worked
+        -- the amount of work which we would like to give to each core.
+        let workSize = max workSizeMin $ numPermutations `div` numCapabilities
+
+        -- divide up the permutations into workSize units
+        let workBoundaries = takeWhile (<=numPermutations) $ iterate (+workSize) 1
+
+        -- upper and lower permutation index bounds for each workSize unit
+        let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
+
+        -- get ready to perform the work
+        -- TODO make sure no two FWorks own memory in the same cache line
+        works <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
+
+        -- perform the work
+        -- worked <- mapConcurrently work works
+        worked <- sequence $ fmap work works -- this is ~4% faster in the -N1 case on my NUC
+
+    -- worked <-
+    --     if numCapabilities == 1
+    --     -- The -N1 case is ~4% faster on this special path on two different
+    --     -- computers. Which is rubbish, but whatever.
+    --     then sequence $ fmap work works
+    --     else mapConcurrently work works
+
+        -- gather up the results and return
+        return $ foldl1' (\(fc0,cs0) (fc1,cs1) -> (max fc0 fc1, cs0+cs1)) worked
 
 
 factorial :: Int -> Int
