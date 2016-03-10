@@ -4,8 +4,7 @@
 
     Contributed by Branimir Maksimovic.
     Optimized/rewritten by Bryan O'Sullivan.
-    Modified by Gabriel Gonzalez.
-    Parallelized and rewritten, based on Haskell GHC #4, by James Brock 2016.
+    Parallelized and rewritten, based on Haskell GHC #4, by James Brock March 2016.
 
     This fannkuch-redux Haskell implementation uses mutable vectors
     for speed.
@@ -14,6 +13,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE UnboxedTuples #-}
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 
 module Main(main) where
@@ -54,30 +54,23 @@ fannkuch !n = do
     -- Number of cores available for work.
     numCapabilities <- getNumCapabilities
 
-    -- The smallest unit of work which is worth parallelizing.
-    let workSizeMin = 1000
-
     -- The amount of work which we would like to give to each core.
-    let workSize = max workSizeMin $ numPermutations `div` numCapabilities
+    let workSize = max 1000 $ numPermutations `div` numCapabilities
 
     -- Divide up the permutations into workSize units
-    let workBoundaries = takeWhile (<=numPermutations) $ iterate (+workSize) 1
+    let workBoundary = takeWhile (<=numPermutations) $ iterate (+workSize) 1
 
     -- Upper and lower permutation index bounds for each workSize unit
-    let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
-
-    -- Get ready to perform the work.
-    -- TODO Make sure no two FWorks own memory in the same cache line?
-    works <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
+    let workRanges = zip workBoundary $ tail workBoundary ++ [numPermutations+1]
 
     -- Perform the work.
-    -- Single-core expression: worked <- sequence $ fmap work works
-    worked <- mapConcurrently work works
+    results <- mapConcurrently (uncurry $ work n) workRanges
 
     -- Gather up the results and return.
-    return $ foldl1' (\(fc0,cs0) (fc1,cs1) -> (max fc0 fc1, cs0+cs1)) worked
+    return $ foldl1' (\(fc0,cs0) (fc1,cs1) -> (max fc0 fc1, cs0+cs1)) results
 
 
+-- | Basic tail-call factorial. Never called on the hot path of this program.
 factorial :: Int -> Int
 factorial z0 = go z0 1
   where
@@ -85,73 +78,53 @@ factorial z0 = go z0 1
     go !z !answer = go (z-1) (answer*z)
 
 
--- | Data for a slice of fannkuch-redux calculation work on a permutation
--- index range.
-data FWork = FWork
-    { permIndexBegin :: !Int
-        -- ^ Lower bound inclusive of the permutation index for this work.
-    , permIndexEnd   :: !Int
-        -- ^ Upper bound exclusive of the permutation index for this work.
-    , perm           :: !(VM.IOVector Int)
-        -- ^ Permutation vector.
-    , tperm          :: !(VM.IOVector Int)
-        -- ^ Working temporary permutation vector.
-    , count          :: !(VM.IOVector Int)
-        -- ^ Count vector.
-        --
-        -- > To optimize the process I use an intermediate data structure,
-        -- > count[], which keeps count of how many rotations have been done
-        -- > at every level. Apparently, count[0] is always 0, as there is
-        -- > only one element at that level, which can't be rotated;
-        -- > count[1] = 0..1 for two elements,
-        -- > count[2] = 0..2 for three elements, etc.
-    }
-
-
--- | Construct a slice of fannkuch-redux calculation work.
-mkFWork
-    :: Int
-        -- ^ n, the size of the total fannkuch-redux problem.
-    -> Int
-        -- ^ Lower bound inclusive of the permutation index for this work.
-    -> Int
-        -- ^ Upper bound exclusive of the permutation index for this work.
-    -> IO FWork
-mkFWork !n !pBegin !pEnd = do
-
-    perm'  <- VM.new n
-    tperm' <- VM.new n
-    count' <- VM.new n
-
-    permIndex n pBegin perm' count'
-
-    return $ FWork
-        { permIndexBegin = pBegin
-        , permIndexEnd   = pEnd
-        , perm           = perm'
-        , tperm          = tperm'
-        , count          = count'
-        }
-
-
--- | Work function which counts flips and calculates checksum.
+-- | Work function which counts flips and calculates checksum for a range of
+-- permutations.
 work
-    :: FWork
-        -- ^ Slice of fannkuch-redux to be calculated.
+    :: Int
+        -- ^ n, The size of the fannkuch-redux problem.
+    -> Int
+        -- ^ Lower bound inclusive of the permutation indices for this work.
+    -> Int
+        -- ^ Upper bound exclusive of the permutation indices for this work.
     -> IO (Int, Int)
         -- ^ (max flips count, checksum)
-work !FWork{..} = do
+work !n !permIndexBegin !permIndexEnd = do
+
+    -- Allocate mutable vector memory in the worker thread. Hopefully no two
+    -- threads will allocate mutable vectors which share a cache line.
+
+    -- Permutation vector.
+    perm  :: VM.IOVector Int <- VM.unsafeNew n
+
+    -- Working temporary permutation vector.
+    tperm :: VM.IOVector Int <- VM.unsafeNew n
+
+    -- Count vector.
+    --
+    -- > To optimize the process I use an intermediate data structure,
+    -- > count[], which keeps count of how many rotations have been done
+    -- > at every level.
+    count :: VM.IOVector Int <- VM.unsafeNew n
+
+    -- Initialize the perm and count vectors.
+    permIndex n permIndexBegin perm count
+
     -- Preserve these mutually-recursive loop and count_flips functions
-    -- from fannkuch-redux Haskell GHC #4 because they are superfast for
-    -- reasons which I don't understand.
+    -- from fannkuch-redux Haskell GHC #4 because they seem unimprovably fast.
     let
-        loop :: Int -> Int -> Int -> IO(Int,Int)
+        loop
+            :: Int -- c,  checksum
+            -> Int -- m,  flip count
+            -> Int -- pc, permutation index
+            -> IO(Int,Int)
         loop !c !m !pc
             | pc == (permIndexEnd-1) = return (m, c)
             | otherwise = do
-                permNext (VM.length perm) perm count
+                permNext n perm count
                 VM.unsafeCopy tperm perm
-                let count_flips !flips = {-# SCC "count_flips" #-} do
+                let count_flips :: Int -> IO (Int, Int)
+                    count_flips !flips = {-# SCC "count_flips" #-} do
                         f <- VM.unsafeRead tperm 0
                         if f == 1
                         then loop
@@ -167,12 +140,9 @@ work !FWork{..} = do
 
 -- | Generate the next permutation vector and count vector.
 permNext
-    :: Int
-        -- ^ Length of permutation.
-    -> VM.IOVector Int
-        -- ^ Vector to be mutated to next permuation.
-    -> VM.IOVector Int
-        -- ^ count vector for recursion depth state.
+    :: Int -- ^ Permutation length.
+    -> VM.IOVector Int -- ^ Vector to be mutated to next permutation.
+    -> VM.IOVector Int -- ^ count vector for recursion depth state.
     -> IO ()
 permNext !n !perm !count = go 1
   where
@@ -207,8 +177,8 @@ permNext !n !perm !count = go 1
 -- > Doing it in the descending order from n-1 to 1 gives us both the count[]
 -- > array and the permutation.
 permIndex
-    :: Int -- ^ Length of permutation.
-    -> Int -- ^ ith permutation index.
+    :: Int -- ^ Permutation length.
+    -> Int -- ^ ith permutation index, 1-based.
     -> VM.IOVector Int -- ^ Mutable permutation vector output.
     -> VM.IOVector Int -- ^ Mutable count vector output.
     -> IO ()
@@ -229,8 +199,7 @@ permIndex !n !i !perm !count = do
 -- | Left-rotate the first i places of perm where i >= 2.
 rotateLeft
     :: VM.IOVector Int
-    -> Int
-        -- ^ must be >= 2
+    -> Int -- ^ Precondition: i >= 2
     -> IO ()
 rotateLeft !perm !i = do
     !perm0 <- VM.unsafeRead perm 0
