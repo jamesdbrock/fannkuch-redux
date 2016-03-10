@@ -5,12 +5,11 @@
     Contributed by Branimir Maksimovic.
     Optimized/rewritten by Bryan O'Sullivan.
     Modified by Gabriel Gonzalez.
-    Parallelized and rewritten by James Brock 2016.
+    Parallelized and rewritten, based on Haskell GHC #4, by James Brock 2016.
 
     This fannkuch-redux Haskell implementation uses mutable vectors
     for speed.
 -}
-
 
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -49,58 +48,34 @@ fannkuch
         -- ^ (max flips count, checksum)
 fannkuch !n = do
 
-    -- number of permutations to consider
+    -- Number of permutations to consider.
     let numPermutations = factorial n
 
-    -- (mkFWork n 1 $ numPermutations+1) >>= work
-
-    -- number of cores available for work.
+    -- Number of cores available for work.
     numCapabilities <- getNumCapabilities
 
-    if True -- numCapabilities == 1
-    then do
-        -- work =<< (mkFWork n 1 $ numPermutations+1)
+    -- The smallest unit of work which is worth parallelizing.
+    let workSizeMin = 1000
 
-        -- fwork <- mkFWork n 1 $ numPermutations+1
-        -- work fwork
+    -- The amount of work which we would like to give to each core.
+    let workSize = max workSizeMin $ numPermutations `div` numCapabilities
 
-        -- (mkFWork n 1 $ numPermutations+1) >>= work
+    -- Divide up the permutations into workSize units
+    let workBoundaries = takeWhile (<=numPermutations) $ iterate (+workSize) 1
 
-        fwork <- mkFWork n 1 $ numPermutations+1
-        worked <- sequence $ fmap work [fwork]
-        return $ head worked
+    -- Upper and lower permutation index bounds for each workSize unit
+    let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
 
-    else do
+    -- Get ready to perform the work.
+    -- TODO Make sure no two FWorks own memory in the same cache line?
+    works <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
 
-        -- the smallest unit of work which is worth forking.
-        let workSizeMin = 1000
+    -- Perform the work.
+    -- Single-core expression: worked <- sequence $ fmap work works
+    worked <- mapConcurrently work works
 
-        -- the amount of work which we would like to give to each core.
-        let workSize = max workSizeMin $ numPermutations `div` numCapabilities
-
-        -- divide up the permutations into workSize units
-        let workBoundaries = takeWhile (<=numPermutations) $ iterate (+workSize) 1
-
-        -- upper and lower permutation index bounds for each workSize unit
-        let workRanges = zip workBoundaries $ tail workBoundaries ++ [numPermutations+1]
-
-        -- get ready to perform the work
-        -- TODO make sure no two FWorks own memory in the same cache line
-        works <- sequence $ fmap (\(b,e) -> mkFWork n b e) workRanges
-
-        -- perform the work
-        -- worked <- mapConcurrently work works
-        worked <- sequence $ fmap work works -- this is ~4% faster in the -N1 case on my NUC
-
-    -- worked <-
-    --     if numCapabilities == 1
-    --     -- The -N1 case is ~4% faster on this special path on two different
-    --     -- computers. Which is rubbish, but whatever.
-    --     then sequence $ fmap work works
-    --     else mapConcurrently work works
-
-        -- gather up the results and return
-        return $ foldl1' (\(fc0,cs0) (fc1,cs1) -> (max fc0 fc1, cs0+cs1)) worked
+    -- Gather up the results and return.
+    return $ foldl1' (\(fc0,cs0) (fc1,cs1) -> (max fc0 fc1, cs0+cs1)) worked
 
 
 factorial :: Int -> Int
@@ -132,6 +107,7 @@ data FWork = FWork
         -- > count[2] = 0..2 for three elements, etc.
     }
 
+
 -- | Construct a slice of fannkuch-redux calculation work.
 mkFWork
     :: Int
@@ -157,13 +133,17 @@ mkFWork !n !pBegin !pEnd = do
         , count          = count'
         }
 
--- | work function with tail-recursion and mutable state.
+
+-- | Work function which counts flips and calculates checksum.
 work
     :: FWork
         -- ^ Slice of fannkuch-redux to be calculated.
     -> IO (Int, Int)
         -- ^ (max flips count, checksum)
 work !FWork{..} = do
+    -- Preserve these mutually-recursive loop and count_flips functions
+    -- from fannkuch-redux Haskell GHC #4 because they are superfast for
+    -- reasons which I don't understand.
     let
         loop :: Int -> Int -> Int -> IO(Int,Int)
         loop !c !m !pc
@@ -184,52 +164,8 @@ work !FWork{..} = do
                 count_flips 0
     loop 0 0 (permIndexBegin-1)
 
--- | work function with tail-recursion and mutable state.
-work'
-    :: FWork
-        -- ^ Slice of fannkuch-redux to be calculated.
-    -> IO (Int, Int)
-        -- ^ (max flips count, checksum)
-work' !FWork{..} = go permIndexBegin 0 0
-  where
-    !n = VM.length perm
-    --- !permIndexEnd' = permIndexEnd
-    go
-        :: Int
-            -- ^ Current permutation index, 1-based
-        -> Int
-            -- ^ Current max flips count
-        -> Int
-            -- ^ Current checksum
-        -> IO (Int, Int)
-            -- ^ (max flips count, checksum)
-    go !pindex !maxFlipCount !checkSum
-        | pindex == permIndexEnd   = return (maxFlipCount, checkSum)
-        | otherwise                = do
-            !flips <- countFlips
-            permNext n perm count -- TODO get rid of length
-            go
-                (pindex+1)
-                (max maxFlipCount flips)
-                (checkSum + (if pindex .&. 1 == 0 then flips else -flips))
 
-    --- {-# INLINE countFlips #-}
-    countFlips :: IO Int
-    countFlips = do
-        VM.unsafeCopy tperm perm
-        goFlips 0
-      where
-        goFlips :: Int -> IO Int
-        goFlips !flips = do
-            !tperm0 <- VM.unsafeRead tperm 0
-            if tperm0 == 1
-            then return flips
-            else do
-                VG.reverse $ VM.unsafeSlice 0 tperm0 tperm
-                goFlips (flips+1)
-
-
--- | Generate the next permutation from the count array.
+-- | Generate the next permutation vector and count vector.
 permNext
     :: Int
         -- ^ Length of permutation.
@@ -259,26 +195,6 @@ permNext !n !perm !count = go 1
                 VM.unsafeWrite count i $ counti+1
                 return ()
 
--- | Left-rotate the first i places of perm where i >= 2.
-rotateLeft
-    :: VM.IOVector Int
-    -> Int
-        -- ^ must be >= 2
-    -> IO ()
-rotateLeft !perm !i = do
-    !perm0 <- VM.unsafeRead perm 0
-
-    -- this is a tiny bit faster than VM.unsafeMove
-    forM_ [0..i-2] $ \j -> do
-        permj <- VM.unsafeRead perm $ j+1
-        VM.unsafeWrite perm j permj
-
-    --- let !pFrom = VM.unsafeSlice 1 (i-1) perm
-    --- let !pTo   = VM.unsafeSlice 0 (i-1) perm
-    --- VM.unsafeMove pTo pFrom
-
-    VM.unsafeWrite perm (i-1) perm0
-
 
 -- | From a permutation index, generate permutation vector and count vector.
 --
@@ -301,8 +217,7 @@ permIndex !n !i !perm !count = do
     -- initialize perm to [1,2,..n]
     forM_ [0..n-1] (\k -> VM.unsafeWrite perm k $ k + 1)
 
-    -- count[0] is always 0. zero-initialization is done by VM.new.
-    -- VM.unsafeWrite count 0 0
+    VM.unsafeWrite count 0 0 -- count[0] is always 0.
 
     -- forM_ k = [n-1..1] over the count vector
     forM_ (take (n-1) $ iterate (subtract 1) (n-1)) $ \ k -> do
@@ -311,3 +226,13 @@ permIndex !n !i !perm !count = do
         replicateM_ countk $ rotateLeft perm $ k+1
 
 
+-- | Left-rotate the first i places of perm where i >= 2.
+rotateLeft
+    :: VM.IOVector Int
+    -> Int
+        -- ^ must be >= 2
+    -> IO ()
+rotateLeft !perm !i = do
+    !perm0 <- VM.unsafeRead perm 0
+    VM.unsafeMove (VM.unsafeSlice 0 (i-1) perm) (VM.unsafeSlice 1 (i-1) perm)
+    VM.unsafeWrite perm (i-1) perm0
