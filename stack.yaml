@@ -2,9 +2,6 @@ flags: {}
 extra-package-dbs: []
 packages:
 - '.'
-extra-deps:
-- primitive-0.6.1.0
-- vector-0.11.0.0
-- async-2.1.0
-- stm-2.4.4.1
-resolver: ghc-7.10.2
+
+resolver: lts-3.22 # ghc 7.10.2
+# resolver: lts-5.12 # ghc 7.10.3

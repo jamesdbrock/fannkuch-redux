@@ -18,7 +18,7 @@ This program is based on the __Haskell GHC #4__ submission, but fixes two proble
 
 ### ghc MAKE
 ```
-$ ghc --make -fllvm -O2 -threaded -rtsopts fannkuch-redux.hs -o fannkuch-redux
+$ ghc --make -fllvm -O2 -threaded -XBangPatterns -XScopedTypeVariables -rtsopts fannkuch-redux.hs -o fannkuch-redux
 ```
 
 ### stack MAKE

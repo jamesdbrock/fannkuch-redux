@@ -1,20 +1,21 @@
-{-  The Computer Language Benchmarks Game
+{-
+The Computer Language Benchmarks Game
 
-    http://benchmarksgame.alioth.debian.org/
+http://benchmarksgame.alioth.debian.org/
 
-    Contributed by Branimir Maksimovic.
-    Optimized/rewritten by Bryan O'Sullivan.
-    Parallelized and rewritten, based on Haskell GHC #4, by James Brock March 2016.
+Contributed by Branimir Maksimovic.
+Optimized/rewritten by Bryan O'Sullivan.
+Parallelized and rewritten by James Brock.
 
-    This fannkuch-redux Haskell implementation uses mutable vectors
-    for speed.
+Build:
+ghc --make -fllvm -O2 -threaded -XBangPatterns -XScopedTypeVariables -rtsopts fannkuch-redux.hs -o fannkuch-redux
+
+Run 1-Core:
+fannkuch-redux +RTS -N1 -RTS 12
+
+Run 4-Core:
+fannkuch-redux +RTS -N4 -RTS 12
 -}
-
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE UnboxedTuples #-}
-{-# OPTIONS_GHC -funbox-strict-fields #-}
 
 module Main(main) where
 

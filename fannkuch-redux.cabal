@@ -14,7 +14,7 @@ cabal-version:       >=1.10
 executable fannkuch-redux
   hs-source-dirs:      src
   main-is:             fannkuch-redux.hs
-  ghc-options:         -fllvm -O2 -threaded -rtsopts -Wall
+  ghc-options:         -fllvm -O2 -threaded -XBangPatterns -XScopedTypeVariables -rtsopts -Wall
   build-depends:       base,vector,async
   default-language:    Haskell2010
 
