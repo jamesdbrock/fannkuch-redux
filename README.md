@@ -1,12 +1,24 @@
 # The Computer Language Benchmarks Game _fannkuch-redux_
 
-A Haskell program submission for the _fannkuch-redux_ program in [The Computer Language Benchmarks Game](http://benchmarksgame.alioth.debian.org/).
+A Haskell program submission for the _[fannkuch-redux](http://benchmarksgame.alioth.debian.org/u64q/performance.php?test=fannkuchredux)_ problem in [The Computer Language Benchmarks Game](http://benchmarksgame.alioth.debian.org/).
 
-This program is based on the __Haskell GHC #4__ submission, but fixes two problems.
+I chose the _fannkuch-redux_ problem because it's the worst data point in Haskell's distribution on the [Which programs are fastest?](http://benchmarksgame.alioth.debian.org/u64q/which-programs-are-fastest.html) page. _fannkuch-redux_ is an "embarassingly parallel" problem, and the fastest Haskell submission for _fannkuch-redux_, __Haskell GHC #4__, is not parallelized.
 
-1. In the 1-core test, __Haskell GHC #4__ failed to build. (Gabriel Gonzales fixed that build problem, but it looks like his fix was only applied to the 4-core test.)
+This program is a re-write with parallelization of the __Haskell GHC #4__ submission. 
 
-2. In the 4-core test, __Haskell GHC #4__ doesn't run in parallel. This program parallelizes __Haskell GHC #4__.
+## Submission Status
+
+[Submitted to Alioth on 2016-03-10](https://alioth.debian.org/tracker/index.php?func=detail&aid=315336&group_id=100815&atid=413122)
+
+Accepted by Alioth on 2016-04-13 as _[fannkuch-redux](http://benchmarksgame.alioth.debian.org/u64q/performance.php?test=fannkuchredux)_ program __[Haskell GHC #6](http://benchmarksgame.alioth.debian.org/u64q/program.php?test=fannkuchredux&lang=ghc&id=6)__.
+
+Here are the before and after images from the [Which programs are fastest?](http://benchmarksgame.alioth.debian.org/u64q/which-programs-are-fastest.html) page. With a parallel _fannkuch-redux_ implementation, Haskell has moved ahead of OCaml and Closure.
+
+### Before
+<img src="http://jamesdbrock.github.io/fannkuch-redux/benchmarksgame.which-programs-are-fastest-firstlast.u64q.20160412.svg" />
+
+### After
+<img src="http://jamesdbrock.github.io/fannkuch-redux/benchmarksgame.which-programs-are-fastest-firstlast.u64q.20160413.svg" />
 
 ## Building
 
@@ -15,6 +27,8 @@ This program is based on the __Haskell GHC #4__ submission, but fixes two proble
 * _ghc >= 7.10.2_ or _stack_
 
 * Packages `base,vector,async`
+
+* _LLVM 3.5_
 
 ### ghc MAKE
 ```
@@ -27,55 +41,9 @@ $ stack build
 $ stack install
 ```
 
-## Running
+## Running with 4-core parallelism
 
-### 1-core
-```
-$ fannkuch-redux +RTS -N1 -RTS 12
-```
-
-### 4-core
 ```
 $ fannkuch-redux +RTS -N4 -RTS 12
 ```
 
-
-
-## References
-
-#### _fannkuch-redux_ Description
-http://benchmarksgame.alioth.debian.org/u64q/fannkuchredux-description.html
-
-#### _fannkuch-redux_ 4-Core Results
-https://benchmarksgame.alioth.debian.org/u64q/performance.php?test=fannkuchredux
-
-#### _fannkuch-redux_ 1-Core Results
-https://benchmarksgame.alioth.debian.org/u64/performance.php?test=fannkuchredux
-
-#### Haskell GHC #4 Implementation
-https://benchmarksgame.alioth.debian.org/u64q/program.php?test=fannkuchredux&lang=ghc&id=4
-
-#### Upload Instructions
-http://benchmarksgame.alioth.debian.org/u64q/play.html
-
-#### 4-Core Fastest Graph
-http://benchmarksgame.alioth.debian.org/u64q/which-programs-are-fastest.html
-
-#### 1-Core Fastest Graph
-http://benchmarksgame.alioth.debian.org/u64/which-programs-are-fastest.html
-
-
-
-## Submission Status
-
-[Submitted to Alioth on 2016-03-10](https://alioth.debian.org/tracker/index.php?func=detail&aid=315336&group_id=100815&atid=413122)
-
-### 4-Core
-
-#### Before
-<img src="http://jamesdbrock.github.io/fannkuch-redux/benchmarksgame.which-programs-are-fastest-firstlast.u64q.20160218.svg" />
-
-### 1-Core
-
-#### Before
-<img src="http://jamesdbrock.github.io/fannkuch-redux/benchmarksgame.which-programs-are-fastest-middle.u64.20151022.svg" />
